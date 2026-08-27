@@ -54,7 +54,7 @@ impl AudioStreamer {
     }
 
     pub async fn stream_bytes(
-        &self,
+        self,
         url_or_id: &str,
     ) -> Result<(VideoMetadata, impl Stream<Item = reqwest::Result<Bytes>>)> {
         let response_info = self.get_stream_response(url_or_id).await?;

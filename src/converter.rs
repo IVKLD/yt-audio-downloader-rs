@@ -21,20 +21,21 @@ impl AudioConverter {
 
     pub async fn convert(
         input_path: &Path,
-        output_dir: &Path,
-        base_name: &str,
+        output_path: &Path,
         format: AudioFormat,
         quality: AudioQuality,
         metadata: Option<&VideoMetadata>,
     ) -> Result<PathBuf> {
         let ext = format.extension();
-        let file_name = format!("{}.{}", sanitize_filename(base_name), ext);
-        let output_path = output_dir.join(file_name);
+
+        if let Some(parent) = output_path.parent() {
+            let _ = tokio::fs::create_dir_all(parent).await;
+        }
 
         if let Some(input_ext) = input_path.extension().and_then(|e| e.to_str()) {
             if input_ext.eq_ignore_ascii_case(ext) && format != AudioFormat::Mp3 {
-                tokio::fs::copy(input_path, &output_path).await?;
-                return Ok(output_path);
+                tokio::fs::copy(input_path, output_path).await?;
+                return Ok(output_path.to_path_buf());
             }
         }
 
@@ -94,7 +95,7 @@ impl AudioConverter {
             return Err(YoutubeAudioError::FFmpegError(stderr));
         }
 
-        Ok(output_path)
+        Ok(output_path.to_path_buf())
     }
 }
 

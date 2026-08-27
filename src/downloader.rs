@@ -1,8 +1,8 @@
 use std::{
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicU64, Ordering},
         Arc,
+        atomic::{AtomicU64, Ordering},
     },
 };
 
@@ -18,9 +18,9 @@ use tokio::{
 };
 
 use crate::{
-    converter::{sanitize_filename, AudioConverter},
+    converter::{AudioConverter, sanitize_filename},
     error::{Result, YoutubeAudioError},
-    extractor::{extract_video_id, YoutubeExtractor},
+    extractor::{YoutubeExtractor, extract_video_id},
     http::create_http_client,
     models::{AudioFormat, AudioQuality, AudioStreamResponse, DownloadedAudio, VideoMetadata},
     progress::{ProgressEvent, ProgressHandler},
@@ -39,6 +39,7 @@ impl Drop for TempFileGuard {
 pub struct YoutubeAudioDownloader {
     client: Client,
     output_dir: PathBuf,
+    output_file: Option<PathBuf>,
     format: AudioFormat,
     quality: AudioQuality,
     progress_handler: Option<ProgressHandler>,
@@ -51,6 +52,7 @@ impl Default for YoutubeAudioDownloader {
         Self {
             client: create_http_client(),
             output_dir: PathBuf::from("downloads"),
+            output_file: None,
             format: AudioFormat::Mp3,
             quality: AudioQuality::Best,
             progress_handler: None,
@@ -67,6 +69,11 @@ impl YoutubeAudioDownloader {
 
     pub fn output_dir<P: AsRef<Path>>(mut self, dir: P) -> Self {
         self.output_dir = dir.as_ref().to_path_buf();
+        self
+    }
+
+    pub fn output_file<P: AsRef<Path>>(mut self, path: P) -> Self {
+        self.output_file = Some(path.as_ref().to_path_buf());
         self
     }
 
@@ -126,11 +133,12 @@ impl YoutubeAudioDownloader {
     }
 
     pub async fn stream_bytes(
-        &self,
+        self,
         url_or_id: &str,
     ) -> Result<(VideoMetadata, impl Stream<Item = reqwest::Result<Bytes>>)> {
-        let streamer = AudioStreamer::new(self.client.clone());
-        streamer.stream_bytes(url_or_id).await
+        AudioStreamer::new(self.client.clone())
+            .stream_bytes(url_or_id)
+            .await
     }
 
     pub async fn download(&self, url_or_id: &str) -> Result<DownloadedAudio> {
@@ -184,10 +192,17 @@ impl YoutubeAudioDownloader {
                 } else {
                     None
                 };
+                let target_path = match &self.output_file {
+                    Some(path) => path.clone(),
+                    None => self.output_dir.join(format!(
+                        "{}.{}",
+                        sanitize_filename(&metadata.title),
+                        self.format.extension()
+                    )),
+                };
                 let final_path = match AudioConverter::convert(
                     &temp_path,
-                    &self.output_dir,
-                    &metadata.title,
+                    &target_path,
                     self.format,
                     self.quality,
                     meta_param,
@@ -481,17 +496,30 @@ impl YoutubeAudioDownloader {
             author: metadata.author.clone(),
         });
 
-        let full_title = if metadata.author.is_empty()
-            || metadata.author == "Unknown"
-            || metadata.author == "YouTube"
-            || metadata.title.contains(&metadata.author)
-        {
-            metadata.title.clone()
-        } else {
-            format!("{} - {}", metadata.author, metadata.title)
+        let target_path = match &self.output_file {
+            Some(path) => path.clone(),
+            None => {
+                let full_title = if metadata.author.is_empty()
+                    || metadata.author == "Unknown"
+                    || metadata.author == "YouTube"
+                    || metadata.title.contains(&metadata.author)
+                {
+                    metadata.title.clone()
+                } else {
+                    format!("{} - {}", metadata.author, metadata.title)
+                };
+                let sanitized = sanitize_filename(&full_title);
+                self.output_dir
+                    .join(format!("{sanitized}.{}", self.format.extension()))
+            }
         };
-        let sanitized_title = sanitize_filename(&full_title);
-        let output_template = self.output_dir.join(format!("{}.%(ext)s", sanitized_title));
+
+        let target_dir = target_path.parent().unwrap_or(&self.output_dir);
+        let target_stem = target_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("output");
+        let output_template = target_dir.join(format!("{}.%(ext)s", target_stem));
 
         struct YtDlpCleanupGuard {
             output_dir: PathBuf,
@@ -519,8 +547,8 @@ impl YoutubeAudioDownloader {
         }
 
         let mut cleanup_guard = YtDlpCleanupGuard {
-            output_dir: self.output_dir.clone(),
-            sanitized_title: sanitized_title.clone(),
+            output_dir: target_dir.to_path_buf(),
+            sanitized_title: target_stem.to_string(),
             completed: false,
         };
 
@@ -598,19 +626,17 @@ impl YoutubeAudioDownloader {
             });
         }
 
-        let expected_final_path =
-            self.output_dir
-                .join(format!("{}.{}", sanitized_title, self.format.extension()));
+        let expected_final_path = target_path.clone();
 
         let final_path = if expected_final_path.exists() {
             expected_final_path
         } else {
             let mut found = None;
-            if let Ok(mut entries) = tokio::fs::read_dir(&self.output_dir).await {
+            if let Ok(mut entries) = tokio::fs::read_dir(target_dir).await {
                 while let Ok(Some(entry)) = entries.next_entry().await {
                     let path = entry.path();
                     if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                        if name.starts_with(&sanitized_title)
+                        if name.starts_with(target_stem)
                             && !name.ends_with(".part")
                             && !name.ends_with(".ytdl")
                         {

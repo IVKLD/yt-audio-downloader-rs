@@ -17,11 +17,7 @@ pub fn youtube_id_to_i64(yt_id: &str) -> i64 {
         hash = hash.wrapping_mul(0x100000001b3);
     }
     let val = (hash & 0x001F_FFFF_FFFF_FFFF) as i64;
-    if val == 0 {
-        1
-    } else {
-        val
-    }
+    if val == 0 { 1 } else { val }
 }
 
 pub fn extract_video_id(url_or_id: &str) -> Result<String> {

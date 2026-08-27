@@ -1,4 +1,4 @@
-# yt-audio-downloader
+# yt-audio-downloader-rs
 
 A high-performance, asynchronous Rust library designed for downloading and streaming audio from YouTube in various formats (`MP3`, `M4A`, `OPUS`, `FLAC`, `WAV`).
 

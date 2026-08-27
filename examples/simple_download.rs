@@ -1,4 +1,4 @@
-use yt_audio_downloader::download_audio;
+use yt_downloader_rs::download_audio;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

@@ -1,11 +1,9 @@
 [package]
 name = "yt-audio-downloader"
 version = "0.1.0"
-edition = "2021"
-authors = ["Antigravity Developer <dev@antigravity.ai>"]
-description = "A powerful, asynchronous Rust library for downloading audio from YouTube."
-keywords = ["youtube", "audio", "downloader", "mp3", "yt-dlp"]
-categories = ["multimedia::audio", "asynchronous"]
+edition = "2024"
+description = "A asynchronous Rust library for downloading audio from YouTube."
+repository = "https://github.com/IVKLD/yt-audio-downloader-rs.git"
 
 [dependencies]
 tokio = { version = "1.38", features = ["full"] }
