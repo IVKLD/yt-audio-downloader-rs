@@ -12,7 +12,7 @@ pub use downloader::YoutubeAudioDownloader;
 pub use error::{Result, YoutubeAudioError};
 pub use extractor::{extract_playlist_id, extract_video_id, is_youtube_url, youtube_id_to_i64};
 use futures_util::Stream;
-pub use http::{create_http_client, create_http_client_with_proxy};
+pub use http::{create_http_client, create_http_client_with_proxy, select_user_agent_for_url};
 pub use models::{
     AudioFormat, AudioQuality, AudioStreamInfo, AudioStreamResponse, DownloadedAudio,
     ExtractedMedia, VideoMetadata,

@@ -1,4 +1,4 @@
-use yt_downloader_rs::{AudioFormat, AudioQuality, ProgressEvent, YoutubeAudioDownloader};
+use yt_audio_downloader::{AudioFormat, AudioQuality, ProgressEvent, YoutubeAudioDownloader};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

@@ -1,6 +1,35 @@
-/downloads
-/target
-**/*.env
-**/*.txt
-**/*.mp3
-**/*.m3u8
+# Rust & Cargo
+/target/
+debug/
+*.pdb
+*.rs.bk
+
+# Media & Downloads
+/downloads/
+/music/
+/audio_output/
+*.mp3
+*.flac
+*.m4a
+*.webm
+*.opus
+*.wav
+*.m3u8
+
+# Temp & Secrets
+.env
+.env.*
+cookies.txt
+*.part
+*.ytdl
+
+# Nix & Direnv
+.direnv/
+.devbox/
+result
+result-*
+
+# IDE
+.idea/
+.vscode/
+.zed/

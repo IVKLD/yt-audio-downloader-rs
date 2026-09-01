@@ -32,11 +32,12 @@ impl AudioConverter {
             let _ = tokio::fs::create_dir_all(parent).await;
         }
 
-        if let Some(input_ext) = input_path.extension().and_then(|e| e.to_str()) {
-            if input_ext.eq_ignore_ascii_case(ext) && format != AudioFormat::Mp3 {
-                tokio::fs::copy(input_path, output_path).await?;
-                return Ok(output_path.to_path_buf());
-            }
+        if let Some(input_ext) = input_path.extension().and_then(|e| e.to_str())
+            && input_ext.eq_ignore_ascii_case(ext)
+            && format != AudioFormat::Mp3
+        {
+            tokio::fs::copy(input_path, output_path).await?;
+            return Ok(output_path.to_path_buf());
         }
 
         if !Self::is_ffmpeg_installed().await {
@@ -45,7 +46,7 @@ impl AudioConverter {
 
         let mut cmd = Command::new("ffmpeg");
         cmd.kill_on_drop(true);
-        cmd.args(["-y", "-i"]).arg(input_path);
+        cmd.args(["-y", "-threads", "0", "-i"]).arg(input_path);
 
         match format {
             AudioFormat::Mp3 => {
@@ -87,7 +88,7 @@ impl AudioConverter {
             ]);
         }
 
-        cmd.arg(&output_path);
+        cmd.arg(output_path);
 
         let output = cmd.output().await?;
         if !output.status.success() {

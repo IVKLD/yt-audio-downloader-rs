@@ -1,5 +1,5 @@
 use futures_util::StreamExt;
-use yt_downloader_rs::{get_stream_info, stream_audio};
+use yt_audio_downloader::{get_stream_info, stream_audio};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

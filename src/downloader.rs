@@ -11,30 +11,18 @@ use futures_util::{Stream, StreamExt};
 use reqwest::Client;
 use tokio::{
     fs::File,
-    io::{AsyncSeekExt, AsyncWriteExt},
-    process::Command,
-    sync::Mutex,
-    task::JoinSet,
+    io::{AsyncWriteExt, BufWriter},
 };
 
 use crate::{
     converter::{AudioConverter, sanitize_filename},
     error::{Result, YoutubeAudioError},
-    extractor::{YoutubeExtractor, extract_video_id},
-    http::create_http_client,
+    extractor::{InnertubeExtractor, YoutubeExtractor, YtDlpExtractor, extract_video_id},
+    http::{create_http_client, select_user_agent_for_url},
     models::{AudioFormat, AudioQuality, AudioStreamResponse, DownloadedAudio, VideoMetadata},
     progress::{ProgressEvent, ProgressHandler},
     streamer::AudioStreamer,
 };
-
-struct TempFileGuard(PathBuf);
-impl Drop for TempFileGuard {
-    fn drop(&mut self) {
-        if self.0.exists() {
-            let _ = std::fs::remove_file(&self.0);
-        }
-    }
-}
 
 pub struct YoutubeAudioDownloader {
     client: Client,
@@ -118,12 +106,12 @@ impl YoutubeAudioDownloader {
     }
 
     pub async fn fetch_playlist(&self, url_or_id: &str) -> Result<Vec<VideoMetadata>> {
-        let extractor = crate::extractor::InnertubeExtractor::new(self.client.clone());
+        let extractor = InnertubeExtractor::new(self.client.clone());
         extractor.fetch_playlist(url_or_id).await
     }
 
     pub async fn search(&self, query: &str, limit: usize) -> Result<Vec<VideoMetadata>> {
-        let extractor = crate::extractor::InnertubeExtractor::new(self.client.clone());
+        let extractor = InnertubeExtractor::new(self.client.clone());
         extractor.search(query, limit).await
     }
 
@@ -150,15 +138,14 @@ impl YoutubeAudioDownloader {
         tokio::fs::create_dir_all(&self.output_dir).await?;
 
         if self.prefer_yt_dlp {
-            return self.download_with_ytdlp(url_or_id).await;
+            return self.download_fallback(url_or_id).await;
         }
 
         let extractor = YoutubeExtractor::new(self.client.clone());
         match extractor.extract_media(&video_id).await {
             Ok(media) => {
-                let best_stream = match media.best_stream().cloned() {
-                    Some(s) => s,
-                    None => return self.download_with_ytdlp(url_or_id).await,
+                let Some(best_stream) = media.best_stream().cloned() else {
+                    return self.download_fallback(url_or_id).await;
                 };
                 let metadata = media.metadata;
 
@@ -169,16 +156,15 @@ impl YoutubeAudioDownloader {
 
                 let temp_path = self
                     .output_dir
-                    .join(format!("temp_{}.{}", video_id, best_stream.container));
-                let _temp_guard = TempFileGuard(temp_path.clone());
+                    .join(format!("temp_{video_id}.{}", best_stream.container));
 
                 if let Err(err) = self
                     .download_stream_to_file(&best_stream.url, &temp_path)
                     .await
                 {
                     let _ = tokio::fs::remove_file(&temp_path).await;
-                    if is_ytdlp_installed().await {
-                        return self.download_with_ytdlp(url_or_id).await;
+                    if YtDlpExtractor::is_available().await {
+                        return self.download_fallback(url_or_id).await;
                     }
                     return Err(err);
                 }
@@ -187,19 +173,13 @@ impl YoutubeAudioDownloader {
                     target_format: self.format.extension().to_string(),
                 });
 
+                let target_path = self.resolve_target_path(&metadata);
                 let meta_param = if self.embed_metadata {
                     Some(&metadata)
                 } else {
                     None
                 };
-                let target_path = match &self.output_file {
-                    Some(path) => path.clone(),
-                    None => self.output_dir.join(format!(
-                        "{}.{}",
-                        sanitize_filename(&metadata.title),
-                        self.format.extension()
-                    )),
-                };
+
                 let final_path = match AudioConverter::convert(
                     &temp_path,
                     &target_path,
@@ -209,18 +189,20 @@ impl YoutubeAudioDownloader {
                 )
                 .await
                 {
-                    Ok(p) => p,
+                    Ok(p) => {
+                        let _ = tokio::fs::remove_file(&temp_path).await;
+                        p
+                    }
                     Err(err) => {
                         let _ = tokio::fs::remove_file(&temp_path).await;
-                        if is_ytdlp_installed().await {
-                            return self.download_with_ytdlp(url_or_id).await;
+                        if YtDlpExtractor::is_available().await {
+                            return self.download_fallback(url_or_id).await;
                         }
                         return Err(err);
                     }
                 };
 
                 let file_size = tokio::fs::metadata(&final_path).await?.len();
-
                 self.emit_progress(ProgressEvent::Finished {
                     output_path: final_path.clone(),
                     total_bytes: file_size,
@@ -233,22 +215,25 @@ impl YoutubeAudioDownloader {
                     file_size_bytes: file_size,
                 })
             }
-            _ => self.download_with_ytdlp(url_or_id).await,
+            Err(_) => self.download_fallback(url_or_id).await,
         }
     }
 
     async fn download_stream_to_file(&self, stream_url: &str, output_path: &Path) -> Result<()> {
-        let initial_res = self
+        let user_agent = select_user_agent_for_url(stream_url);
+
+        let probe = self
             .client
             .get(stream_url)
-            .header("Range", "bytes=0-0")
+            .header(reqwest::header::USER_AGENT, user_agent)
+            .header(reqwest::header::RANGE, "bytes=0-0")
             .send()
             .await;
 
-        let content_length = match initial_res {
+        let total_size = match probe {
             Ok(ref res) => res
                 .headers()
-                .get("content-range")
+                .get(reqwest::header::CONTENT_RANGE)
                 .and_then(|v| v.to_str().ok())
                 .and_then(|s| s.rfind('/').map(|i| &s[i + 1..]))
                 .and_then(|s| s.parse::<u64>().ok())
@@ -256,239 +241,135 @@ impl YoutubeAudioDownloader {
             Err(_) => None,
         };
 
-        if let Some(total_size) = content_length {
-            if total_size > 0 {
-                return self
-                    .download_stream_chunked(stream_url, output_path, total_size)
-                    .await;
-            }
+        if let Some(total_bytes) = total_size
+            && total_bytes > 0
+        {
+            return self
+                .download_chunked_parallel(stream_url, user_agent, output_path, total_bytes)
+                .await;
         }
 
-        self.download_stream_sequential(stream_url, output_path)
-            .await
+        self.download_sequential(stream_url, user_agent, output_path).await
     }
 
-    async fn download_stream_chunked(
+    async fn download_chunked_parallel(
         &self,
         stream_url: &str,
+        user_agent: &'static str,
         output_path: &Path,
-        total_size: u64,
+        total_bytes: u64,
     ) -> Result<()> {
-        let file = File::create(output_path).await?;
-        file.set_len(total_size).await?;
-        let file = Arc::new(Mutex::new(file));
-
-        let chunk_size: u64 = 1024 * 1024; // 1 MB chunks
-        let total_chunks = (total_size + chunk_size - 1) / chunk_size;
+        const CHUNK_SIZE: u64 = 1024 * 1024; // 1 MB slices bypass YouTube CDN throttling
+        let num_chunks = (total_bytes + CHUNK_SIZE - 1) / CHUNK_SIZE;
 
         let downloaded_bytes = Arc::new(AtomicU64::new(0));
-        let semaphore = Arc::new(tokio::sync::Semaphore::new(6));
 
-        let mut join_set = JoinSet::new();
+        let chunks: Vec<(usize, u64, u64)> = (0..num_chunks)
+            .map(|i| {
+                let start = i * CHUNK_SIZE;
+                let end = std::cmp::min(start + CHUNK_SIZE - 1, total_bytes - 1);
+                (i as usize, start, end)
+            })
+            .collect();
 
-        for i in 0..total_chunks {
-            let start_byte = i * chunk_size;
-            let end_byte = std::cmp::min((i + 1) * chunk_size - 1, total_size - 1);
-            let client = self.client.clone();
-            let url = stream_url.to_string();
-            let file = file.clone();
-            let downloaded_bytes = downloaded_bytes.clone();
-            let semaphore = semaphore.clone();
-            let progress_handler = self.progress_handler.clone();
+        let client = self.client.clone();
+        let downloaded_ref = downloaded_bytes.clone();
+        let url = stream_url.to_string();
 
-            join_set.spawn(async move {
-                let _permit = semaphore
-                    .acquire()
-                    .await
-                    .map_err(|_| YoutubeAudioError::DownloadFailed("Semaphore closed".into()))?;
-
-                let mut retries = 0;
-                const MAX_RETRIES: u32 = 5;
-
-                loop {
-                    let req = client
+        let mut stream = futures_util::stream::iter(chunks)
+            .map(|(idx, start, end)| {
+                let client = client.clone();
+                let url = url.clone();
+                let downloaded = downloaded_ref.clone();
+                async move {
+                    let resp = client
                         .get(&url)
-                        .header("Range", format!("bytes={start_byte}-{end_byte}"));
+                        .header(reqwest::header::USER_AGENT, user_agent)
+                        .header(reqwest::header::RANGE, format!("bytes={start}-{end}"))
+                        .send()
+                        .await?;
 
-                    match req.send().await {
-                        Ok(mut resp) => {
-                            if !resp.status().is_success() {
-                                if retries < MAX_RETRIES {
-                                    retries += 1;
-                                    tokio::time::sleep(std::time::Duration::from_millis(
-                                        200 * retries as u64,
-                                    ))
-                                    .await;
-                                    continue;
-                                }
-                                return Err(YoutubeAudioError::DownloadFailed(format!(
-                                    "HTTP status {}",
-                                    resp.status()
-                                )));
-                            }
-
-                            let mut current_offset = start_byte;
-                            let mut chunk_err = false;
-
-                            while let Some(chunk_res) = resp.chunk().await.transpose() {
-                                match chunk_res {
-                                    Ok(chunk) => {
-                                        {
-                                            let mut f = file.lock().await;
-                                            f.seek(std::io::SeekFrom::Start(current_offset))
-                                                .await?;
-                                            f.write_all(&chunk).await?;
-                                        }
-                                        current_offset += chunk.len() as u64;
-                                        let total = downloaded_bytes
-                                            .fetch_add(chunk.len() as u64, Ordering::Relaxed)
-                                            + chunk.len() as u64;
-
-                                        if let Some(ref handler) = progress_handler {
-                                            let percentage =
-                                                Some((total as f32 / total_size as f32) * 100.0);
-                                            handler(ProgressEvent::Downloading {
-                                                bytes_downloaded: total,
-                                                total_bytes: Some(total_size),
-                                                percentage,
-                                            });
-                                        }
-                                    }
-                                    Err(_) => {
-                                        chunk_err = true;
-                                        break;
-                                    }
-                                }
-                            }
-
-                            if !chunk_err && current_offset > end_byte {
-                                return Ok(());
-                            }
-                        }
-                        Err(_) => {
-                            if retries < MAX_RETRIES {
-                                retries += 1;
-                                tokio::time::sleep(std::time::Duration::from_millis(
-                                    200 * retries as u64,
-                                ))
-                                .await;
-                                continue;
-                            }
-                            return Err(YoutubeAudioError::DownloadFailed(
-                                "Max retries reached".into(),
-                            ));
-                        }
+                    if !resp.status().is_success() && resp.status().as_u16() != 206 {
+                        return Err(YoutubeAudioError::DownloadFailed(format!(
+                            "HTTP status {}",
+                            resp.status()
+                        )));
                     }
 
-                    retries += 1;
-                    if retries >= MAX_RETRIES {
-                        return Err(YoutubeAudioError::DownloadFailed(
-                            "Max retries reached".into(),
-                        ));
-                    }
+                    let bytes = resp.bytes().await?;
+                    let downloaded_total = downloaded.fetch_add(bytes.len() as u64, Ordering::Relaxed)
+                        + bytes.len() as u64;
+
+                    self.emit_progress(ProgressEvent::Downloading {
+                        bytes_downloaded: downloaded_total,
+                        total_bytes: Some(total_bytes),
+                        percentage: Some((downloaded_total as f32 / total_bytes as f32) * 100.0),
+                    });
+
+                    Ok::<(usize, Bytes), YoutubeAudioError>((idx, bytes))
                 }
+            })
+            .buffer_unordered(6);
+
+        let mut collected: Vec<(usize, Bytes)> = Vec::with_capacity(num_chunks as usize);
+        while let Some(res) = stream.next().await {
+            collected.push(res?);
+        }
+
+        collected.sort_by_key(|(idx, _)| *idx);
+
+        let mut writer = BufWriter::new(File::create(output_path).await?);
+        for (_, chunk) in collected {
+            writer.write_all(&chunk).await?;
+        }
+        writer.flush().await?;
+
+        Ok(())
+    }
+
+    async fn download_sequential(
+        &self,
+        stream_url: &str,
+        user_agent: &'static str,
+        output_path: &Path,
+    ) -> Result<()> {
+        let resp = self
+            .client
+            .get(stream_url)
+            .header(reqwest::header::USER_AGENT, user_agent)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            return Err(YoutubeAudioError::DownloadFailed(format!(
+                "HTTP {}",
+                resp.status()
+            )));
+        }
+
+        let total_bytes = resp.content_length();
+        let mut downloaded: u64 = 0;
+        let mut stream = resp.bytes_stream();
+        let mut writer = BufWriter::new(File::create(output_path).await?);
+
+        while let Some(chunk_res) = stream.next().await {
+            let chunk = chunk_res?;
+            writer.write_all(&chunk).await?;
+            downloaded += chunk.len() as u64;
+
+            let percentage = total_bytes.map(|total| (downloaded as f32 / total as f32) * 100.0);
+            self.emit_progress(ProgressEvent::Downloading {
+                bytes_downloaded: downloaded,
+                total_bytes,
+                percentage,
             });
         }
 
-        while let Some(res) = join_set.join_next().await {
-            match res {
-                Ok(Ok(())) => {}
-                Ok(Err(e)) => {
-                    join_set.abort_all();
-                    return Err(e);
-                }
-                Err(e) => {
-                    join_set.abort_all();
-                    return Err(YoutubeAudioError::DownloadFailed(e.to_string()));
-                }
-            }
-        }
-
-        let mut f = file.lock().await;
-        f.flush().await?;
-
+        writer.flush().await?;
         Ok(())
     }
 
-    async fn download_stream_sequential(&self, stream_url: &str, output_path: &Path) -> Result<()> {
-        let mut file = File::create(output_path).await?;
-        let mut downloaded: u64 = 0;
-        let mut total_size: Option<u64> = None;
-        let mut retries = 0;
-        const MAX_RETRIES: u32 = 15;
-
-        while retries < MAX_RETRIES {
-            let mut req = self.client.get(stream_url);
-            if downloaded > 0 {
-                req = req.header("Range", format!("bytes={}-", downloaded));
-            }
-
-            match req.send().await {
-                Ok(res) => {
-                    if total_size.is_none() {
-                        if downloaded == 0 {
-                            total_size = res.content_length();
-                        } else if let Some(content_range) = res.headers().get("content-range") {
-                            if let Ok(range_str) = content_range.to_str() {
-                                if let Some(slash_idx) = range_str.rfind('/') {
-                                    if let Ok(total) = range_str[slash_idx + 1..].parse::<u64>() {
-                                        total_size = Some(total);
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    let mut stream = res.bytes_stream();
-                    let mut chunk_err = false;
-
-                    while let Some(chunk_result) = stream.next().await {
-                        match chunk_result {
-                            Ok(chunk) => {
-                                file.write_all(&chunk).await?;
-                                downloaded += chunk.len() as u64;
-                                let percentage = total_size
-                                    .map(|total| (downloaded as f32 / total as f32) * 100.0);
-
-                                self.emit_progress(ProgressEvent::Downloading {
-                                    bytes_downloaded: downloaded,
-                                    total_bytes: total_size,
-                                    percentage,
-                                });
-                            }
-                            Err(e) => {
-                                tracing::warn!(
-                                    "YouTube stream chunk error: {e}. Retrying from byte {downloaded}..."
-                                );
-                                chunk_err = true;
-                                break;
-                            }
-                        }
-                    }
-
-                    if !chunk_err {
-                        if let Some(total) = total_size {
-                            if downloaded >= total {
-                                break;
-                            }
-                        } else {
-                            break;
-                        }
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!("HTTP request error on download attempt {retries}: {e}");
-                }
-            }
-
-            retries += 1;
-        }
-
-        file.flush().await?;
-        Ok(())
-    }
-
-    pub async fn download_with_ytdlp(&self, url_or_id: &str) -> Result<DownloadedAudio> {
+    async fn download_fallback(&self, url_or_id: &str) -> Result<DownloadedAudio> {
         let (metadata, _) = YoutubeExtractor::fetch_fallback(url_or_id).await?;
 
         self.emit_progress(ProgressEvent::MetadataFetched {
@@ -496,140 +377,27 @@ impl YoutubeAudioDownloader {
             author: metadata.author.clone(),
         });
 
-        let target_path = match &self.output_file {
-            Some(path) => path.clone(),
-            None => {
-                let full_title = if metadata.author.is_empty()
-                    || metadata.author == "Unknown"
-                    || metadata.author == "YouTube"
-                    || metadata.title.contains(&metadata.author)
-                {
-                    metadata.title.clone()
-                } else {
-                    format!("{} - {}", metadata.author, metadata.title)
-                };
-                let sanitized = sanitize_filename(&full_title);
-                self.output_dir
-                    .join(format!("{sanitized}.{}", self.format.extension()))
-            }
-        };
-
+        let target_path = self.resolve_target_path(&metadata);
         let target_dir = target_path.parent().unwrap_or(&self.output_dir);
         let target_stem = target_path
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("output");
-        let output_template = target_dir.join(format!("{}.%(ext)s", target_stem));
+        let output_template = target_dir.join(format!("{target_stem}.%(ext)s"));
 
-        struct YtDlpCleanupGuard {
-            output_dir: PathBuf,
-            sanitized_title: String,
-            completed: bool,
-        }
+        let ytdlp = YtDlpExtractor::default();
+        ytdlp
+            .download_audio(
+                url_or_id,
+                &output_template,
+                self.format,
+                self.quality,
+                self.embed_metadata,
+            )
+            .await?;
 
-        impl Drop for YtDlpCleanupGuard {
-            fn drop(&mut self) {
-                if !self.completed {
-                    let prefix = self.sanitized_title.clone();
-                    let output_dir = self.output_dir.clone();
-                    if let Ok(entries) = std::fs::read_dir(&output_dir) {
-                        for entry in entries.flatten() {
-                            let path = entry.path();
-                            if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
-                                if file_name.contains(&prefix) {
-                                    let _ = std::fs::remove_file(&path);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        let mut cleanup_guard = YtDlpCleanupGuard {
-            output_dir: target_dir.to_path_buf(),
-            sanitized_title: target_stem.to_string(),
-            completed: false,
-        };
-
-        let audio_format_arg = match self.format {
-            AudioFormat::Best => "best",
-            fmt => fmt.extension(),
-        };
-
-        let cmd_name = find_ytdlp_cmd()
-            .await
-            .ok_or(YoutubeAudioError::YtDlpNotFound)?;
-        let mut cmd = Command::new(cmd_name);
-        cmd.kill_on_drop(true);
-        cmd.args([
-            "-x",
-            "--audio-format",
-            audio_format_arg,
-            "--audio-quality",
-            self.quality.bitrate_kbps(),
-            "-N",
-            "4",
-            "-o",
-            output_template.to_str().unwrap_or_default(),
-            "--no-playlist",
-            "--no-warnings",
-        ]);
-
-        if Command::new("node").arg("--version").output().await.is_ok() {
-            cmd.args(["--js-runtimes", "node"]);
-        }
-
-        let home = std::env::var("HOME").unwrap_or_default();
-        let cookies_path = format!("{home}/.config/vortex-dl/cookies.txt");
-        if std::path::Path::new("./cookies.txt").exists() {
-            cmd.args(["--cookies", "./cookies.txt"]);
-        } else if !home.is_empty() && std::path::Path::new(&cookies_path).exists() {
-            cmd.args(["--cookies", &cookies_path]);
-        } else {
-            if std::path::Path::new(&format!("{home}/.mozilla/firefox")).exists()
-                || std::path::Path::new(&format!("{home}/.snap/firefox")).exists()
-            {
-                cmd.args(["--cookies-from-browser", "firefox"]);
-            } else if std::path::Path::new(&format!("{home}/.config/google-chrome")).exists() {
-                cmd.args(["--cookies-from-browser", "chrome"]);
-            } else if std::path::Path::new(&format!("{home}/.config/chromium")).exists() {
-                cmd.args(["--cookies-from-browser", "chromium"]);
-            }
-        }
-
-        if self.embed_metadata {
-            cmd.arg("--add-metadata");
-        }
-
-        cmd.arg(url_or_id);
-
-        self.emit_progress(ProgressEvent::Downloading {
-            bytes_downloaded: 0,
-            total_bytes: None,
-            percentage: None,
-        });
-
-        let output = cmd.output().await.map_err(|e| {
-            if e.kind() == std::io::ErrorKind::NotFound {
-                YoutubeAudioError::YtDlpNotFound
-            } else {
-                YoutubeAudioError::Io(e)
-            }
-        })?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-            return Err(YoutubeAudioError::YtDlpFailed {
-                status: output.status.code(),
-                stderr,
-            });
-        }
-
-        let expected_final_path = target_path.clone();
-
-        let final_path = if expected_final_path.exists() {
-            expected_final_path
+        let final_path = if target_path.exists() {
+            target_path
         } else {
             let mut found = None;
             if let Ok(mut entries) = tokio::fs::read_dir(target_dir).await {
@@ -651,13 +419,7 @@ impl YoutubeAudioDownloader {
             })?
         };
 
-        cleanup_guard.completed = true;
-
-        let file_size = tokio::fs::metadata(&final_path)
-            .await
-            .map(|m| m.len())
-            .unwrap_or(0);
-
+        let file_size = tokio::fs::metadata(&final_path).await?.len();
         self.emit_progress(ProgressEvent::Finished {
             output_path: final_path.clone(),
             total_bytes: file_size,
@@ -670,38 +432,24 @@ impl YoutubeAudioDownloader {
             file_size_bytes: file_size,
         })
     }
-}
 
-pub async fn find_ytdlp_cmd() -> Option<String> {
-    let home = std::env::var("HOME").unwrap_or_default();
-    if !home.is_empty() {
-        let user_bin = format!("{home}/.local/bin/yt-dlp");
-        if std::path::Path::new(&user_bin).exists() {
-            return Some(user_bin);
+    fn resolve_target_path(&self, metadata: &VideoMetadata) -> PathBuf {
+        if let Some(ref path) = self.output_file {
+            return path.clone();
         }
-    }
-    if std::path::Path::new("./yt-dlp").exists() {
-        return Some("./yt-dlp".to_string());
-    }
-    if let Ok(exe_path) = std::env::current_exe() {
-        if let Some(parent) = exe_path.parent() {
-            let local_exe = parent.join("yt-dlp");
-            if local_exe.exists() {
-                return Some(local_exe.to_string_lossy().to_string());
-            }
-        }
-    }
-    if Command::new("yt-dlp")
-        .arg("--version")
-        .output()
-        .await
-        .is_ok()
-    {
-        return Some("yt-dlp".to_string());
-    }
-    None
-}
 
-pub async fn is_ytdlp_installed() -> bool {
-    find_ytdlp_cmd().await.is_some()
+        let full_title = if metadata.author.is_empty()
+            || metadata.author == "Unknown"
+            || metadata.author == "YouTube"
+            || metadata.title.contains(&metadata.author)
+        {
+            metadata.title.clone()
+        } else {
+            format!("{} - {}", metadata.author, metadata.title)
+        };
+
+        let sanitized = sanitize_filename(&full_title);
+        self.output_dir
+            .join(format!("{sanitized}.{}", self.format.extension()))
+    }
 }
