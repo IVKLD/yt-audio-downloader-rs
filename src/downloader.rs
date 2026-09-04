@@ -249,7 +249,8 @@ impl YoutubeAudioDownloader {
                 .await;
         }
 
-        self.download_sequential(stream_url, user_agent, output_path).await
+        self.download_sequential(stream_url, user_agent, output_path)
+            .await
     }
 
     async fn download_chunked_parallel(
@@ -297,7 +298,8 @@ impl YoutubeAudioDownloader {
                     }
 
                     let bytes = resp.bytes().await?;
-                    let downloaded_total = downloaded.fetch_add(bytes.len() as u64, Ordering::Relaxed)
+                    let downloaded_total = downloaded
+                        .fetch_add(bytes.len() as u64, Ordering::Relaxed)
                         + bytes.len() as u64;
 
                     self.emit_progress(ProgressEvent::Downloading {

@@ -61,7 +61,10 @@ pub fn parse_player_response(video_id: &str, json: &Value) -> Result<ExtractedMe
     let mut all_formats = Vec::new();
 
     if let Some(streaming_data) = json.get("streamingData") {
-        if let Some(adaptive) = streaming_data.get("adaptiveFormats").and_then(|v| v.as_array()) {
+        if let Some(adaptive) = streaming_data
+            .get("adaptiveFormats")
+            .and_then(|v| v.as_array())
+        {
             all_formats.extend(adaptive.iter());
         }
         if let Some(formats) = streaming_data.get("formats").and_then(|v| v.as_array()) {
@@ -194,7 +197,9 @@ pub fn parse_playlist_contents(json: &Value) -> Vec<VideoMetadata> {
 pub fn parse_search_results(json: &Value, limit: usize) -> Vec<VideoMetadata> {
     let mut tracks = Vec::new();
     let sections = json
-        .pointer("/contents/twoColumnSearchResultsRenderer/primaryContents/sectionListRenderer/contents")
+        .pointer(
+            "/contents/twoColumnSearchResultsRenderer/primaryContents/sectionListRenderer/contents",
+        )
         .or_else(|| json.pointer("/contents/sectionListRenderer/contents"))
         .and_then(|v| v.as_array());
 

@@ -35,7 +35,11 @@ impl YtDlpExtractor {
         ];
         for candidate in candidates {
             if std::path::Path::new(&candidate).exists()
-                || Command::new(&candidate).arg("--version").output().await.is_ok()
+                || Command::new(&candidate)
+                    .arg("--version")
+                    .output()
+                    .await
+                    .is_ok()
             {
                 return Ok(candidate);
             }
@@ -74,7 +78,10 @@ impl YtDlpExtractor {
         } else if !home.is_empty()
             && std::path::Path::new(&format!("{home}/.config/vortex-dl/cookies.txt")).exists()
         {
-            cmd.args(["--cookies", &format!("{home}/.config/vortex-dl/cookies.txt")]);
+            cmd.args([
+                "--cookies",
+                &format!("{home}/.config/vortex-dl/cookies.txt"),
+            ]);
         }
 
         Ok(cmd)
@@ -129,7 +136,13 @@ impl MediaExtractor for YtDlpExtractor {
     ) -> Pin<Box<dyn Future<Output = Result<ExtractedMedia>> + Send + 'a>> {
         Box::pin(async move {
             let mut cmd = self.build_command().await?;
-            cmd.args(["-j", "-f", "bestaudio/best", "--no-playlist", "--no-warnings"]);
+            cmd.args([
+                "-j",
+                "-f",
+                "bestaudio/best",
+                "--no-playlist",
+                "--no-warnings",
+            ]);
             cmd.arg(target);
 
             let output = cmd.output().await?;
@@ -181,8 +194,14 @@ impl MediaExtractor for YtDlpExtractor {
                 author,
                 duration_seconds: json.get("duration").and_then(|v| v.as_u64()).unwrap_or(0),
                 view_count: json.get("view_count").and_then(|v| v.as_u64()).unwrap_or(0),
-                thumbnail_url: json.get("thumbnail").and_then(|v| v.as_str()).map(String::from),
-                description: json.get("description").and_then(|v| v.as_str()).map(String::from),
+                thumbnail_url: json
+                    .get("thumbnail")
+                    .and_then(|v| v.as_str())
+                    .map(String::from),
+                description: json
+                    .get("description")
+                    .and_then(|v| v.as_str())
+                    .map(String::from),
             };
 
             let content_length = json
@@ -190,7 +209,11 @@ impl MediaExtractor for YtDlpExtractor {
                 .or_else(|| json.get("filesize_approx"))
                 .and_then(|v| v.as_u64());
 
-            let ext = json.get("ext").and_then(|v| v.as_str()).unwrap_or("webm").to_string();
+            let ext = json
+                .get("ext")
+                .and_then(|v| v.as_str())
+                .unwrap_or("webm")
+                .to_string();
             let streams = vec![AudioStreamInfo {
                 url: stream_url,
                 mime_type: format!("audio/{ext}"),
@@ -198,7 +221,11 @@ impl MediaExtractor for YtDlpExtractor {
                 sample_rate: json.get("asr").and_then(|v| v.as_u64()).map(|v| v as u32),
                 content_length,
                 container: ext,
-                audio_codec: json.get("acodec").and_then(|v| v.as_str()).unwrap_or("opus").to_string(),
+                audio_codec: json
+                    .get("acodec")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("opus")
+                    .to_string(),
             }];
 
             Ok(ExtractedMedia { metadata, streams })

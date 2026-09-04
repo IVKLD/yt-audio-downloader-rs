@@ -162,13 +162,7 @@ impl AudioStreamer {
                                         Err(e) => {
                                             return Some((
                                                 Err(e),
-                                                (
-                                                    final_end + 1,
-                                                    client,
-                                                    url,
-                                                    user_agent,
-                                                    final_end,
-                                                ),
+                                                (final_end + 1, client, url, user_agent, final_end),
                                             ));
                                         }
                                     }
