@@ -1,5 +1,5 @@
 use futures_util::StreamExt;
-use yt_downloader_rs::{
+use yt_audio_downloader::{
     AudioFormat, AudioQuality, YoutubeAudioDownloader, download_audio, extractor::extract_video_id,
     get_stream_info, stream_audio,
 };
@@ -85,7 +85,7 @@ async fn test_downloader_custom_options() {
 
 #[tokio::test]
 async fn test_search_youtube() {
-    let results = yt_downloader_rs::search_youtube("Never Gonna Give You Up", 5)
+    let results = yt_audio_downloader::search_youtube("Never Gonna Give You Up", 5)
         .await
         .unwrap();
     println!("Search results count: {}", results.len());

@@ -260,7 +260,7 @@ impl YoutubeAudioDownloader {
         total_bytes: u64,
     ) -> Result<()> {
         const CHUNK_SIZE: u64 = 1024 * 1024; // 1 MB slices bypass YouTube CDN throttling
-        let num_chunks = (total_bytes + CHUNK_SIZE - 1) / CHUNK_SIZE;
+        let num_chunks = total_bytes.div_ceil(CHUNK_SIZE);
 
         let downloaded_bytes = Arc::new(AtomicU64::new(0));
 
@@ -403,14 +403,13 @@ impl YoutubeAudioDownloader {
             if let Ok(mut entries) = tokio::fs::read_dir(target_dir).await {
                 while let Ok(Some(entry)) = entries.next_entry().await {
                     let path = entry.path();
-                    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                        if name.starts_with(target_stem)
-                            && !name.ends_with(".part")
-                            && !name.ends_with(".ytdl")
-                        {
-                            found = Some(path);
-                            break;
-                        }
+                    if let Some(name) = path.file_name().and_then(|n| n.to_str())
+                        && name.starts_with(target_stem)
+                        && !name.ends_with(".part")
+                        && !name.ends_with(".ytdl")
+                    {
+                        found = Some(path);
+                        break;
                     }
                 }
             }

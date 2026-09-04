@@ -51,6 +51,16 @@ impl YtDlpExtractor {
         if Command::new("node").arg("--version").output().await.is_ok() {
             cmd.args(["--js-runtimes", "node"]);
         }
+        cmd.args([
+            "--no-config",
+            "--no-cache-dir",
+            "--no-check-certificates",
+            "--no-call-home",
+            "--socket-timeout",
+            "5",
+            "--extractor-args",
+            "youtube:player_client=web_embedded,android_vr;skip=hls,dash",
+        ]);
 
         if let Some(ref proxy) = self.proxy
             && !proxy.is_empty()
@@ -65,10 +75,6 @@ impl YtDlpExtractor {
             && std::path::Path::new(&format!("{home}/.config/vortex-dl/cookies.txt")).exists()
         {
             cmd.args(["--cookies", &format!("{home}/.config/vortex-dl/cookies.txt")]);
-        } else if std::path::Path::new(&format!("{home}/.mozilla/firefox")).exists() {
-            cmd.args(["--cookies-from-browser", "firefox"]);
-        } else if std::path::Path::new(&format!("{home}/.config/google-chrome")).exists() {
-            cmd.args(["--cookies-from-browser", "chrome"]);
         }
 
         Ok(cmd)
@@ -179,13 +185,18 @@ impl MediaExtractor for YtDlpExtractor {
                 description: json.get("description").and_then(|v| v.as_str()).map(String::from),
             };
 
+            let content_length = json
+                .get("filesize")
+                .or_else(|| json.get("filesize_approx"))
+                .and_then(|v| v.as_u64());
+
             let ext = json.get("ext").and_then(|v| v.as_str()).unwrap_or("webm").to_string();
             let streams = vec![AudioStreamInfo {
                 url: stream_url,
                 mime_type: format!("audio/{ext}"),
                 bitrate: json.get("abr").and_then(|v| v.as_u64()).unwrap_or(128) as u32,
                 sample_rate: json.get("asr").and_then(|v| v.as_u64()).map(|v| v as u32),
-                content_length: None,
+                content_length,
                 container: ext,
                 audio_codec: json.get("acodec").and_then(|v| v.as_str()).unwrap_or("opus").to_string(),
             }];

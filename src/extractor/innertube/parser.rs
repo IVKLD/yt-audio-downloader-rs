@@ -58,67 +58,78 @@ pub fn parse_player_response(video_id: &str, json: &Value) -> Result<ExtractedMe
     };
 
     let mut streams = Vec::new();
-    if let Some(formats) = json
-        .get("streamingData")
-        .and_then(|s| s.get("adaptiveFormats"))
-        .and_then(|v| v.as_array())
-    {
-        for fmt in formats {
-            let mime = fmt.get("mimeType").and_then(|v| v.as_str()).unwrap_or("");
-            if mime.starts_with("audio/") {
-                let url_opt = fmt
-                    .get("url")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string())
-                    .or_else(|| {
-                        fmt.get("signatureCipher")
-                            .or_else(|| fmt.get("cipher"))
-                            .and_then(|v| v.as_str())
-                            .and_then(|cipher_str| {
-                                url::form_urlencoded::parse(cipher_str.as_bytes())
-                                    .find(|(k, _)| k == "url")
-                                    .map(|(_, v)| v.into_owned())
-                            })
-                    });
+    let mut all_formats = Vec::new();
 
-                if let Some(direct_url) = url_opt {
-                    let container = if mime.contains("webm") {
-                        "webm"
-                    } else if mime.contains("mp4") {
-                        "m4a"
-                    } else {
-                        "audio"
-                    };
-
-                    let codec = if mime.contains("opus") {
-                        "opus"
-                    } else if mime.contains("mp4a") {
-                        "aac"
-                    } else {
-                        "unknown"
-                    };
-
-                    streams.push(AudioStreamInfo {
-                        url: direct_url,
-                        mime_type: mime.to_string(),
-                        bitrate: fmt.get("bitrate").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
-                        sample_rate: fmt
-                            .get("audioSampleRate")
-                            .and_then(|v| v.as_str())
-                            .and_then(|s| s.parse().ok()),
-                        content_length: fmt
-                            .get("contentLength")
-                            .and_then(|v| v.as_str())
-                            .and_then(|s| s.parse().ok()),
-                        container: container.to_string(),
-                        audio_codec: codec.to_string(),
-                    });
-                }
-            }
+    if let Some(streaming_data) = json.get("streamingData") {
+        if let Some(adaptive) = streaming_data.get("adaptiveFormats").and_then(|v| v.as_array()) {
+            all_formats.extend(adaptive.iter());
+        }
+        if let Some(formats) = streaming_data.get("formats").and_then(|v| v.as_array()) {
+            all_formats.extend(formats.iter());
         }
     }
 
-    streams.sort_by(|a, b| b.bitrate.cmp(&a.bitrate));
+    for fmt in all_formats {
+        let mime = fmt.get("mimeType").and_then(|v| v.as_str()).unwrap_or("");
+        let is_audio_only = mime.starts_with("audio/");
+        let has_audio = is_audio_only
+            || fmt.get("audioQuality").is_some()
+            || fmt.get("audioSampleRate").is_some();
+        if !has_audio {
+            continue;
+        }
+
+        let url_opt = fmt
+            .get("url")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .or_else(|| {
+                fmt.get("signatureCipher")
+                    .or_else(|| fmt.get("cipher"))
+                    .and_then(|v| v.as_str())
+                    .and_then(|cipher_str| {
+                        url::form_urlencoded::parse(cipher_str.as_bytes())
+                            .find(|(k, _)| k == "url")
+                            .map(|(_, v)| v.into_owned())
+                    })
+            });
+
+        if let Some(direct_url) = url_opt {
+            let container = if mime.contains("webm") {
+                "webm"
+            } else if mime.contains("mp4") {
+                "m4a"
+            } else {
+                "audio"
+            };
+
+            let codec = if mime.contains("opus") {
+                "opus"
+            } else if mime.contains("mp4a") {
+                "aac"
+            } else {
+                "unknown"
+            };
+
+            streams.push(AudioStreamInfo {
+                url: direct_url,
+                mime_type: mime.to_string(),
+                bitrate: fmt.get("bitrate").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+                sample_rate: fmt
+                    .get("audioSampleRate")
+                    .and_then(|v| v.as_str())
+                    .and_then(|s| s.parse().ok()),
+                content_length: fmt
+                    .get("contentLength")
+                    .and_then(|v| v.as_str())
+                    .and_then(|s| s.parse().ok()),
+                container: container.to_string(),
+                audio_codec: codec.to_string(),
+            });
+        }
+    }
+
+    streams.sort_by_key(|b| std::cmp::Reverse(b.bitrate));
 
     if streams.is_empty() {
         return Err(YoutubeAudioError::NoAudioStreamFound);

@@ -34,13 +34,27 @@ impl YoutubeExtractor {
     }
 
     pub async fn extract_media(&self, target: &str) -> Result<ExtractedMedia> {
-        match self.primary.extract(target).await {
-            Ok(media) => Ok(media),
-            Err(e) => {
-                tracing::warn!(
-                    "Primary Innertube extractor failed: {e}. Falling back to yt-dlp..."
-                );
-                self.fallback.extract(target).await
+        let mut primary_fut = self.primary.extract(target);
+        let mut fallback_fut = self.fallback.extract(target);
+
+        tokio::select! {
+            res = &mut primary_fut => {
+                match res {
+                    Ok(media) => Ok(media),
+                    Err(e) => {
+                        tracing::debug!("Primary Innertube extractor ({e}), waiting for yt-dlp...");
+                        fallback_fut.await
+                    }
+                }
+            }
+            res = &mut fallback_fut => {
+                match res {
+                    Ok(media) => Ok(media),
+                    Err(e) => {
+                        tracing::debug!("Fallback yt-dlp failed ({e}), waiting for Innertube...");
+                        primary_fut.await
+                    }
+                }
             }
         }
     }

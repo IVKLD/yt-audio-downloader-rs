@@ -12,7 +12,8 @@ pub fn create_http_client_with_proxy(proxy_url: Option<&str>) -> Client {
         .tcp_nodelay(true)
         .pool_max_idle_per_host(20)
         .pool_idle_timeout(Duration::from_secs(120))
-        .timeout(Duration::from_secs(30));
+        .connect_timeout(Duration::from_secs(15))
+        .read_timeout(Duration::from_secs(45));
 
     if let Some(proxy_str) = proxy_url
         && !proxy_str.is_empty()
@@ -27,6 +28,8 @@ pub fn create_http_client_with_proxy(proxy_url: Option<&str>) -> Client {
 pub fn select_user_agent_for_url(url: &str) -> &'static str {
     if url.contains("c=ANDROID_VR") {
         "com.google.android.apps.youtube.vr/1.56.21 (Linux; U; Android 12; en_US)"
+    } else if url.contains("c=ANDROID_MUSIC") {
+        "com.google.android.apps.youtube.music/6.42.52 (Linux; U; Android 14; en_US)"
     } else if url.contains("c=ANDROID") {
         "com.google.android.youtube/19.11.38 (Linux; U; Android 14; en_US)"
     } else if url.contains("c=IOS") {

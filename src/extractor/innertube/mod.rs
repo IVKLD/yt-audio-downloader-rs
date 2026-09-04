@@ -56,7 +56,12 @@ impl MediaExtractor for InnertubeExtractor {
         Box::pin(async move {
             let video_id = extract_video_id(target)?;
             let innertube_client = InnertubeClient::new(&self.client);
-            let client_configs = [("ANDROID_VR", "1.56.21"), ("ANDROID", "19.11.38")];
+            let client_configs = [
+                ("ANDROID_VR", "1.56.21"),
+                ("ANDROID_MUSIC", "6.42.52"),
+                ("IOS", "19.29.1"),
+                ("ANDROID", "19.11.38"),
+            ];
 
             let futures: Vec<_> = client_configs
                 .iter()
