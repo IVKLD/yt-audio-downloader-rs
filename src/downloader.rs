@@ -55,6 +55,11 @@ impl YoutubeAudioDownloader {
         Self::default()
     }
 
+    pub fn client(mut self, client: Client) -> Self {
+        self.client = client;
+        self
+    }
+
     pub fn output_dir<P: AsRef<Path>>(mut self, dir: P) -> Self {
         self.output_dir = dir.as_ref().to_path_buf();
         self
@@ -113,6 +118,15 @@ impl YoutubeAudioDownloader {
     pub async fn search(&self, query: &str, limit: usize) -> Result<Vec<VideoMetadata>> {
         let extractor = InnertubeExtractor::new(self.client.clone());
         extractor.search(query, limit).await
+    }
+
+    pub async fn search_page(
+        &self,
+        query: &str,
+        continuation: Option<&str>,
+    ) -> Result<(Vec<VideoMetadata>, Option<String>)> {
+        let extractor = InnertubeExtractor::new(self.client.clone());
+        extractor.search_page(query, continuation).await
     }
 
     pub async fn get_stream(&self, url_or_id: &str) -> Result<AudioStreamResponse> {

@@ -4,7 +4,9 @@ pub mod parser;
 use std::{future::Future, pin::Pin};
 
 use client::InnertubeClient;
-use parser::{parse_player_response, parse_playlist_contents, parse_search_results};
+use parser::{
+    parse_player_response, parse_playlist_contents, parse_search_results_with_token,
+};
 use reqwest::Client;
 
 use super::{
@@ -25,8 +27,8 @@ impl InnertubeExtractor {
         Self { client }
     }
 
-    pub async fn fetch_playlist(&self, target: &str) -> Result<Vec<VideoMetadata>> {
-        let playlist_id = extract_playlist_id(target).ok_or_else(|| {
+    pub async fn fetch_playlist(&self, url_or_id: &str) -> Result<Vec<VideoMetadata>> {
+        let playlist_id = extract_playlist_id(url_or_id).ok_or_else(|| {
             YoutubeAudioError::InvalidUrl("Not a valid playlist URL or ID".into())
         })?;
 
@@ -41,10 +43,46 @@ impl InnertubeExtractor {
         Ok(parse_playlist_contents(&json))
     }
 
-    pub async fn search(&self, query: &str, limit: usize) -> Result<Vec<VideoMetadata>> {
+    pub async fn search_page(
+        &self,
+        query: &str,
+        continuation: Option<&str>,
+    ) -> Result<(Vec<VideoMetadata>, Option<String>)> {
         let innertube_client = InnertubeClient::new(&self.client);
-        let json = innertube_client.fetch_search_json(query).await?;
-        Ok(parse_search_results(&json, limit))
+        let json = match continuation {
+            Some(token) if !token.is_empty() => {
+                innertube_client.fetch_search_continuation_json(token).await?
+            }
+            _ => innertube_client.fetch_search_json(query).await?,
+        };
+
+        Ok(parse_search_results_with_token(&json))
+    }
+
+    pub async fn search(&self, query: &str, limit: usize) -> Result<Vec<VideoMetadata>> {
+        let (tracks, continuation_token) = self.search_page(query, None).await?;
+        if tracks.len() >= limit || limit <= 25 || continuation_token.is_none() {
+            let mut result = tracks;
+            result.truncate(limit);
+            return Ok(result);
+        }
+
+        let mut all_tracks = tracks;
+        let mut seen_ids: std::collections::HashSet<_> =
+            all_tracks.iter().map(|t| t.id.clone()).collect();
+
+        if let Some(token) = continuation_token {
+            if let Ok((next_tracks, _)) = self.search_page(query, Some(&token)).await {
+                for track in next_tracks {
+                    if seen_ids.insert(track.id.clone()) {
+                        all_tracks.push(track);
+                    }
+                }
+            }
+        }
+
+        all_tracks.truncate(limit);
+        Ok(all_tracks)
     }
 }
 

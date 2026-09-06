@@ -194,71 +194,179 @@ pub fn parse_playlist_contents(json: &Value) -> Vec<VideoMetadata> {
     tracks
 }
 
-pub fn parse_search_results(json: &Value, limit: usize) -> Vec<VideoMetadata> {
-    let mut tracks = Vec::new();
-    let sections = json
-        .pointer(
-            "/contents/twoColumnSearchResultsRenderer/primaryContents/sectionListRenderer/contents",
-        )
-        .or_else(|| json.pointer("/contents/sectionListRenderer/contents"))
-        .and_then(|v| v.as_array());
+pub fn parse_view_count(s: &str) -> Option<u64> {
+    let cleaned = s.split_whitespace().next()?.replace(',', "");
+    if let Some(num) = cleaned.strip_suffix('B').or_else(|| cleaned.strip_suffix('b')) {
+        let val: f64 = num.parse().ok()?;
+        Some((val * 1_000_000_000.0) as u64)
+    } else if let Some(num) = cleaned.strip_suffix('M').or_else(|| cleaned.strip_suffix('m')) {
+        let val: f64 = num.parse().ok()?;
+        Some((val * 1_000_000.0) as u64)
+    } else if let Some(num) = cleaned.strip_suffix('K').or_else(|| cleaned.strip_suffix('k')) {
+        let val: f64 = num.parse().ok()?;
+        Some((val * 1_000.0) as u64)
+    } else {
+        cleaned.parse::<u64>().ok()
+    }
+}
 
-    if let Some(sections) = sections {
+pub fn parse_video_renderer(video: &Value) -> Option<VideoMetadata> {
+    let vid = video.get("videoId").and_then(|v| v.as_str())?;
+    if vid.is_empty() {
+        return None;
+    }
+    let title = video
+        .pointer("/title/runs/0/text")
+        .and_then(|v| v.as_str())
+        .unwrap_or("Unknown")
+        .to_string();
+    let author = video
+        .pointer("/ownerText/runs/0/text")
+        .or_else(|| video.pointer("/longBylineText/runs/0/text"))
+        .or_else(|| video.pointer("/shortBylineText/runs/0/text"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("Unknown")
+        .to_string();
+    let duration_seconds = video
+        .get("lengthText")
+        .and_then(|v| v.get("simpleText"))
+        .or_else(|| video.pointer("/lengthText/runs/0/text"))
+        .and_then(|v| v.as_str())
+        .map(parse_duration_str)
+        .unwrap_or(0);
+
+    let thumbnail_url = video
+        .pointer("/thumbnail/thumbnails")
+        .and_then(|arr| arr.as_array())
+        .and_then(|arr| arr.last())
+        .and_then(|t| t.get("url"))
+        .and_then(|u| u.as_str())
+        .map(|s| s.to_string());
+
+    let view_count = video
+        .pointer("/viewCountText/simpleText")
+        .or_else(|| video.pointer("/viewCountText/runs/0/text"))
+        .or_else(|| video.pointer("/shortViewCountText/simpleText"))
+        .or_else(|| video.pointer("/shortViewCountText/runs/0/text"))
+        .and_then(|v| v.as_str())
+        .and_then(parse_view_count)
+        .unwrap_or(0);
+
+    Some(VideoMetadata {
+        id: vid.to_string(),
+        title,
+        author,
+        duration_seconds,
+        view_count,
+        thumbnail_url,
+        description: None,
+    })
+}
+
+fn extract_token_from_continuation_renderer(val: &Value) -> Option<String> {
+    val.pointer("/continuationItemRenderer/continuationEndpoint/continuationCommand/token")
+        .or_else(|| val.pointer("/continuationEndpoint/continuationCommand/token"))
+        .and_then(|v| v.as_str())
+        .map(String::from)
+}
+
+fn process_search_item(
+    item: &Value,
+    tracks: &mut Vec<VideoMetadata>,
+    seen_ids: &mut std::collections::HashSet<String>,
+    continuation_token: &mut Option<String>,
+) {
+    if let Some(video) = item.get("videoRenderer") {
+        if let Some(meta) = parse_video_renderer(video) {
+            if seen_ids.insert(meta.id.clone()) {
+                tracks.push(meta);
+            }
+        }
+    } else if let Some(shelf_items) = item
+        .pointer("/shelfRenderer/content/verticalListRenderer/items")
+        .and_then(|v| v.as_array())
+    {
+        for sub_item in shelf_items {
+            if let Some(video) = sub_item.get("videoRenderer") {
+                if let Some(meta) = parse_video_renderer(video) {
+                    if seen_ids.insert(meta.id.clone()) {
+                        tracks.push(meta);
+                    }
+                }
+            }
+        }
+    } else if let Some(token) = extract_token_from_continuation_renderer(item) {
+        *continuation_token = Some(token);
+    }
+}
+
+pub fn parse_search_results_with_token(json: &Value) -> (Vec<VideoMetadata>, Option<String>) {
+    let mut tracks = Vec::new();
+    let mut continuation_token = None;
+    let mut seen_ids = std::collections::HashSet::new();
+
+    // 1. Initial search response
+    if let Some(sections) = json
+        .pointer("/contents/twoColumnSearchResultsRenderer/primaryContents/sectionListRenderer/contents")
+        .or_else(|| json.pointer("/contents/sectionListRenderer/contents"))
+        .and_then(|v| v.as_array())
+    {
         for section in sections {
             if let Some(contents) = section
                 .pointer("/itemSectionRenderer/contents")
                 .and_then(|v| v.as_array())
             {
                 for item in contents {
-                    if let Some(video) = item.get("videoRenderer") {
-                        let vid = video.get("videoId").and_then(|v| v.as_str()).unwrap_or("");
-                        if !vid.is_empty() {
-                            let title = video
-                                .pointer("/title/runs/0/text")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("Unknown")
-                                .to_string();
-                            let author = video
-                                .pointer("/ownerText/runs/0/text")
-                                .or_else(|| video.pointer("/longBylineText/runs/0/text"))
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("Unknown")
-                                .to_string();
-                            let duration_seconds = video
-                                .get("lengthText")
-                                .and_then(|v| v.get("simpleText"))
-                                .or_else(|| video.pointer("/lengthText/runs/0/text"))
-                                .and_then(|v| v.as_str())
-                                .map(parse_duration_str)
-                                .unwrap_or(0);
+                    process_search_item(item, &mut tracks, &mut seen_ids, &mut continuation_token);
+                }
+            }
+            if let Some(token) = extract_token_from_continuation_renderer(section) {
+                continuation_token = Some(token);
+            }
+        }
+    }
 
-                            let thumbnail_url = video
-                                .pointer("/thumbnail/thumbnails")
-                                .and_then(|arr| arr.as_array())
-                                .and_then(|arr| arr.last())
-                                .and_then(|t| t.get("url"))
-                                .and_then(|u| u.as_str())
-                                .map(|s| s.to_string());
-
-                            tracks.push(VideoMetadata {
-                                id: vid.to_string(),
-                                title,
-                                author,
-                                duration_seconds,
-                                view_count: 0,
-                                thumbnail_url,
-                                description: None,
-                            });
-
-                            if tracks.len() >= limit {
-                                return tracks;
-                            }
+    // 2. Continuation response
+    if let Some(commands) = json
+        .get("onResponseReceivedCommands")
+        .and_then(|v| v.as_array())
+    {
+        for cmd in commands {
+            if let Some(items) = cmd
+                .pointer("/appendContinuationItemsAction/continuationItems")
+                .and_then(|v| v.as_array())
+            {
+                for item in items {
+                    if let Some(contents) = item
+                        .pointer("/itemSectionRenderer/contents")
+                        .and_then(|v| v.as_array())
+                    {
+                        for sub_item in contents {
+                            process_search_item(
+                                sub_item,
+                                &mut tracks,
+                                &mut seen_ids,
+                                &mut continuation_token,
+                            );
                         }
+                    } else {
+                        process_search_item(
+                            item,
+                            &mut tracks,
+                            &mut seen_ids,
+                            &mut continuation_token,
+                        );
                     }
                 }
             }
         }
     }
 
+    (tracks, continuation_token)
+}
+
+pub fn parse_search_results(json: &Value, limit: usize) -> Vec<VideoMetadata> {
+    let (mut tracks, _) = parse_search_results_with_token(json);
+    tracks.truncate(limit);
     tracks
 }

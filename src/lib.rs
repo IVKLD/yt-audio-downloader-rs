@@ -62,3 +62,35 @@ pub async fn fetch_playlist(url_or_id: &str) -> Result<Vec<VideoMetadata>> {
 pub async fn search_youtube(query: &str, limit: usize) -> Result<Vec<VideoMetadata>> {
     YoutubeAudioDownloader::new().search(query, limit).await
 }
+
+pub async fn search_youtube_with_client(
+    query: &str,
+    limit: usize,
+    client: reqwest::Client,
+) -> Result<Vec<VideoMetadata>> {
+    YoutubeAudioDownloader::new()
+        .client(client)
+        .search(query, limit)
+        .await
+}
+
+pub async fn search_youtube_page(
+    query: &str,
+    continuation: Option<&str>,
+) -> Result<(Vec<VideoMetadata>, Option<String>)> {
+    YoutubeAudioDownloader::new()
+        .search_page(query, continuation)
+        .await
+}
+
+pub async fn search_youtube_page_with_client(
+    query: &str,
+    continuation: Option<&str>,
+    client: reqwest::Client,
+) -> Result<(Vec<VideoMetadata>, Option<String>)> {
+    YoutubeAudioDownloader::new()
+        .client(client)
+        .search_page(query, continuation)
+        .await
+}
+

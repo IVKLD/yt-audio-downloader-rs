@@ -133,4 +133,30 @@ impl<'a> InnertubeClient<'a> {
 
         Ok(json)
     }
+
+    pub async fn fetch_search_continuation_json(&self, continuation: &str) -> Result<Value> {
+        let url = "https://www.youtube.com/youtubei/v1/search";
+        let payload = serde_json::json!({
+            "continuation": continuation,
+            "context": {
+                "client": {
+                    "clientName": "WEB",
+                    "clientVersion": "2.20231201.00.00",
+                    "hl": "en",
+                    "gl": "US"
+                }
+            }
+        });
+
+        let json: Value = self
+            .http
+            .post(url)
+            .json(&payload)
+            .send()
+            .await?
+            .json()
+            .await?;
+
+        Ok(json)
+    }
 }
