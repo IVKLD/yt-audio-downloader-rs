@@ -196,13 +196,22 @@ pub fn parse_playlist_contents(json: &Value) -> Vec<VideoMetadata> {
 
 pub fn parse_view_count(s: &str) -> Option<u64> {
     let cleaned = s.split_whitespace().next()?.replace(',', "");
-    if let Some(num) = cleaned.strip_suffix('B').or_else(|| cleaned.strip_suffix('b')) {
+    if let Some(num) = cleaned
+        .strip_suffix('B')
+        .or_else(|| cleaned.strip_suffix('b'))
+    {
         let val: f64 = num.parse().ok()?;
         Some((val * 1_000_000_000.0) as u64)
-    } else if let Some(num) = cleaned.strip_suffix('M').or_else(|| cleaned.strip_suffix('m')) {
+    } else if let Some(num) = cleaned
+        .strip_suffix('M')
+        .or_else(|| cleaned.strip_suffix('m'))
+    {
         let val: f64 = num.parse().ok()?;
         Some((val * 1_000_000.0) as u64)
-    } else if let Some(num) = cleaned.strip_suffix('K').or_else(|| cleaned.strip_suffix('k')) {
+    } else if let Some(num) = cleaned
+        .strip_suffix('K')
+        .or_else(|| cleaned.strip_suffix('k'))
+    {
         let val: f64 = num.parse().ok()?;
         Some((val * 1_000.0) as u64)
     } else {
@@ -307,7 +316,9 @@ pub fn parse_search_results_with_token(json: &Value) -> (Vec<VideoMetadata>, Opt
 
     // 1. Initial search response
     if let Some(sections) = json
-        .pointer("/contents/twoColumnSearchResultsRenderer/primaryContents/sectionListRenderer/contents")
+        .pointer(
+            "/contents/twoColumnSearchResultsRenderer/primaryContents/sectionListRenderer/contents",
+        )
         .or_else(|| json.pointer("/contents/sectionListRenderer/contents"))
         .and_then(|v| v.as_array())
     {

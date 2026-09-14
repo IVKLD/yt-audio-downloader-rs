@@ -4,9 +4,7 @@ pub mod parser;
 use std::{future::Future, pin::Pin};
 
 use client::InnertubeClient;
-use parser::{
-    parse_player_response, parse_playlist_contents, parse_search_results_with_token,
-};
+use parser::{parse_player_response, parse_playlist_contents, parse_search_results_with_token};
 use reqwest::Client;
 
 use super::{
@@ -51,7 +49,9 @@ impl InnertubeExtractor {
         let innertube_client = InnertubeClient::new(&self.client);
         let json = match continuation {
             Some(token) if !token.is_empty() => {
-                innertube_client.fetch_search_continuation_json(token).await?
+                innertube_client
+                    .fetch_search_continuation_json(token)
+                    .await?
             }
             _ => innertube_client.fetch_search_json(query).await?,
         };

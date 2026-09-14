@@ -93,4 +93,3 @@ pub async fn search_youtube_page_with_client(
         .search_page(query, continuation)
         .await
 }
-
