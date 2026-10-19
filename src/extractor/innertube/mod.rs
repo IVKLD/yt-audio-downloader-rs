@@ -1,7 +1,7 @@
 pub mod client;
 pub mod parser;
 
-use std::{future::Future, pin::Pin};
+use std::{collections::HashSet, future::Future, pin::Pin};
 
 use client::InnertubeClient;
 use parser::{parse_player_response, parse_playlist_contents, parse_search_results_with_token};
@@ -68,15 +68,14 @@ impl InnertubeExtractor {
         }
 
         let mut all_tracks = tracks;
-        let mut seen_ids: std::collections::HashSet<_> =
-            all_tracks.iter().map(|t| t.id.clone()).collect();
+        let mut seen_ids: HashSet<_> = all_tracks.iter().map(|t| t.id.clone()).collect();
 
-        if let Some(token) = continuation_token {
-            if let Ok((next_tracks, _)) = self.search_page(query, Some(&token)).await {
-                for track in next_tracks {
-                    if seen_ids.insert(track.id.clone()) {
-                        all_tracks.push(track);
-                    }
+        if let Some(token) = continuation_token
+            && let Ok((next_tracks, _)) = self.search_page(query, Some(&token)).await
+        {
+            for track in next_tracks {
+                if seen_ids.insert(track.id.clone()) {
+                    all_tracks.push(track);
                 }
             }
         }
@@ -94,31 +93,24 @@ impl MediaExtractor for InnertubeExtractor {
         Box::pin(async move {
             let video_id = extract_video_id(target)?;
             let innertube_client = InnertubeClient::new(&self.client);
-            let client_configs = [
-                ("ANDROID_VR", "1.56.21"),
-                ("ANDROID_MUSIC", "6.42.52"),
-                ("IOS", "19.29.1"),
-                ("ANDROID", "19.11.38"),
-            ];
 
-            let futures: Vec<_> = client_configs
-                .iter()
-                .map(|(c_name, c_ver)| {
-                    let v_id = video_id.clone();
-                    let client = &innertube_client;
-                    Box::pin(async move {
-                        let json = client.fetch_player_json(&v_id, c_name, c_ver).await?;
-                        let media = parse_player_response(&v_id, &json)?;
-                        if media.streams.is_empty() {
-                            Err(YoutubeAudioError::NoAudioStreamFound)
-                        } else {
-                            Ok(media)
-                        }
-                    })
-                })
-                .collect();
+            // Fast-path: ANDROID_VR gives direct unthrottled audio streams (opus/m4a) without cipher
+            if let Ok(json) = innertube_client
+                .fetch_player_json(&video_id, "ANDROID_VR", "1.56.21")
+                .await
+                && let Ok(media) = parse_player_response(&video_id, &json)
+                && !media.streams.is_empty()
+            {
+                return Ok(media);
+            }
 
-            if let Ok((media, _)) = futures_util::future::select_ok(futures).await {
+            // Fallback Innertube: WEB client
+            if let Ok(json) = innertube_client
+                .fetch_player_json(&video_id, "WEB", "2.20240725.01.00")
+                .await
+                && let Ok(media) = parse_player_response(&video_id, &json)
+                && !media.streams.is_empty()
+            {
                 return Ok(media);
             }
 

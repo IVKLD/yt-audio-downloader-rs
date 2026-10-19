@@ -1,3 +1,5 @@
+use std::{cmp::Reverse, collections::HashSet};
+
 use serde_json::Value;
 
 use crate::{
@@ -82,57 +84,47 @@ pub fn parse_player_response(video_id: &str, json: &Value) -> Result<ExtractedMe
             continue;
         }
 
-        let url_opt = fmt
+        let Some(direct_url) = fmt
             .get("url")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
-            .or_else(|| {
-                fmt.get("signatureCipher")
-                    .or_else(|| fmt.get("cipher"))
-                    .and_then(|v| v.as_str())
-                    .and_then(|cipher_str| {
-                        url::form_urlencoded::parse(cipher_str.as_bytes())
-                            .find(|(k, _)| k == "url")
-                            .map(|(_, v)| v.into_owned())
-                    })
-            });
+        else {
+            continue;
+        };
+        let container = if mime.contains("webm") {
+            "webm"
+        } else if mime.contains("mp4") {
+            "m4a"
+        } else {
+            "audio"
+        };
 
-        if let Some(direct_url) = url_opt {
-            let container = if mime.contains("webm") {
-                "webm"
-            } else if mime.contains("mp4") {
-                "m4a"
-            } else {
-                "audio"
-            };
+        let codec = if mime.contains("opus") {
+            "opus"
+        } else if mime.contains("mp4a") {
+            "aac"
+        } else {
+            "unknown"
+        };
 
-            let codec = if mime.contains("opus") {
-                "opus"
-            } else if mime.contains("mp4a") {
-                "aac"
-            } else {
-                "unknown"
-            };
-
-            streams.push(AudioStreamInfo {
-                url: direct_url,
-                mime_type: mime.to_string(),
-                bitrate: fmt.get("bitrate").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
-                sample_rate: fmt
-                    .get("audioSampleRate")
-                    .and_then(|v| v.as_str())
-                    .and_then(|s| s.parse().ok()),
-                content_length: fmt
-                    .get("contentLength")
-                    .and_then(|v| v.as_str())
-                    .and_then(|s| s.parse().ok()),
-                container: container.to_string(),
-                audio_codec: codec.to_string(),
-            });
-        }
+        streams.push(AudioStreamInfo {
+            url: direct_url,
+            mime_type: mime.to_string(),
+            bitrate: fmt.get("bitrate").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+            sample_rate: fmt
+                .get("audioSampleRate")
+                .and_then(|v| v.as_str())
+                .and_then(|s| s.parse().ok()),
+            content_length: fmt
+                .get("contentLength")
+                .and_then(|v| v.as_str())
+                .and_then(|s| s.parse().ok()),
+            container: container.to_string(),
+            audio_codec: codec.to_string(),
+        });
     }
 
-    streams.sort_by_key(|b| std::cmp::Reverse(b.bitrate));
+    streams.sort_by_key(|b| Reverse(b.bitrate));
 
     if streams.is_empty() {
         return Err(YoutubeAudioError::NoAudioStreamFound);
@@ -282,26 +274,24 @@ fn extract_token_from_continuation_renderer(val: &Value) -> Option<String> {
 fn process_search_item(
     item: &Value,
     tracks: &mut Vec<VideoMetadata>,
-    seen_ids: &mut std::collections::HashSet<String>,
+    seen_ids: &mut HashSet<String>,
     continuation_token: &mut Option<String>,
 ) {
-    if let Some(video) = item.get("videoRenderer") {
-        if let Some(meta) = parse_video_renderer(video) {
-            if seen_ids.insert(meta.id.clone()) {
-                tracks.push(meta);
-            }
-        }
+    if let Some(video) = item.get("videoRenderer")
+        && let Some(meta) = parse_video_renderer(video)
+        && seen_ids.insert(meta.id.clone())
+    {
+        tracks.push(meta);
     } else if let Some(shelf_items) = item
         .pointer("/shelfRenderer/content/verticalListRenderer/items")
         .and_then(|v| v.as_array())
     {
         for sub_item in shelf_items {
-            if let Some(video) = sub_item.get("videoRenderer") {
-                if let Some(meta) = parse_video_renderer(video) {
-                    if seen_ids.insert(meta.id.clone()) {
-                        tracks.push(meta);
-                    }
-                }
+            if let Some(video) = sub_item.get("videoRenderer")
+                && let Some(meta) = parse_video_renderer(video)
+                && seen_ids.insert(meta.id.clone())
+            {
+                tracks.push(meta);
             }
         }
     } else if let Some(token) = extract_token_from_continuation_renderer(item) {
@@ -312,7 +302,7 @@ fn process_search_item(
 pub fn parse_search_results_with_token(json: &Value) -> (Vec<VideoMetadata>, Option<String>) {
     let mut tracks = Vec::new();
     let mut continuation_token = None;
-    let mut seen_ids = std::collections::HashSet::new();
+    let mut seen_ids = HashSet::new();
 
     // 1. Initial search response
     if let Some(sections) = json

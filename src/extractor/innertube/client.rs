@@ -1,7 +1,7 @@
-use reqwest::Client;
-use serde_json::Value;
+use reqwest::{Client, header::COOKIE};
+use serde_json::{Value, json};
 
-use crate::error::Result;
+use crate::{error::Result, http::YOUTUBE_COOKIE_HEADER};
 
 pub struct InnertubeClient<'a> {
     pub http: &'a Client,
@@ -19,7 +19,7 @@ impl<'a> InnertubeClient<'a> {
         client_version: &str,
     ) -> Result<Value> {
         let url = "https://www.youtube.com/youtubei/v1/player";
-        let mut client_obj = serde_json::json!({
+        let mut client_obj = json!({
             "clientName": client_name,
             "clientVersion": client_version,
             "hl": "en",
@@ -27,17 +27,17 @@ impl<'a> InnertubeClient<'a> {
         });
 
         if client_name.starts_with("ANDROID") {
-            client_obj["androidSdkVersion"] = serde_json::json!(34);
+            client_obj["androidSdkVersion"] = json!(34);
         } else if client_name == "IOS" {
-            client_obj["deviceModel"] = serde_json::json!("iPhone16,2");
-            client_obj["useragent"] = serde_json::json!(
+            client_obj["deviceModel"] = json!("iPhone16,2");
+            client_obj["useragent"] = json!(
                 "com.google.ios.youtube/19.29.1 (iPhone16,2; U; CPU iOS 17_5_1 like Mac OS X; en_US)"
             );
-            client_obj["osName"] = serde_json::json!("iOS");
-            client_obj["osVersion"] = serde_json::json!("17.5.1.21F90");
+            client_obj["osName"] = json!("iOS");
+            client_obj["osVersion"] = json!("17.5.1.21F90");
         }
 
-        let mut payload = serde_json::json!({
+        let mut payload = json!({
             "videoId": video_id,
             "context": {
                 "client": client_obj
@@ -45,7 +45,7 @@ impl<'a> InnertubeClient<'a> {
         });
 
         if client_name == "WEB_EMBEDDED_PLAYER" {
-            payload["thirdParty"] = serde_json::json!({
+            payload["thirdParty"] = json!({
                 "embedUrl": format!("https://www.youtube.com/embed/{video_id}")
             });
         }
@@ -69,22 +69,24 @@ impl<'a> InnertubeClient<'a> {
             }
         };
 
-        let json: Value = self
+        let mut req = self
             .http
             .post(url)
             .header("User-Agent", user_agent)
-            .json(&payload)
-            .send()
-            .await?
-            .json()
-            .await?;
+            .json(&payload);
+
+        if let Some(ref cookies) = *YOUTUBE_COOKIE_HEADER {
+            req = req.header(COOKIE, cookies);
+        }
+
+        let json: Value = req.send().await?.json().await?;
 
         Ok(json)
     }
 
     pub async fn fetch_browse_json(&self, browse_id: &str) -> Result<Value> {
         let url = "https://www.youtube.com/youtubei/v1/browse";
-        let payload = serde_json::json!({
+        let payload = json!({
             "browseId": browse_id,
             "context": {
                 "client": {
@@ -96,21 +98,19 @@ impl<'a> InnertubeClient<'a> {
             }
         });
 
-        let json: Value = self
-            .http
-            .post(url)
-            .json(&payload)
-            .send()
-            .await?
-            .json()
-            .await?;
+        let mut req = self.http.post(url).json(&payload);
+        if let Some(ref cookies) = *YOUTUBE_COOKIE_HEADER {
+            req = req.header(COOKIE, cookies);
+        }
+
+        let json: Value = req.send().await?.json().await?;
 
         Ok(json)
     }
 
     pub async fn fetch_search_json(&self, query: &str) -> Result<Value> {
         let url = "https://www.youtube.com/youtubei/v1/search";
-        let payload = serde_json::json!({
+        let payload = json!({
             "query": query,
             "context": {
                 "client": {
@@ -122,21 +122,19 @@ impl<'a> InnertubeClient<'a> {
             }
         });
 
-        let json: Value = self
-            .http
-            .post(url)
-            .json(&payload)
-            .send()
-            .await?
-            .json()
-            .await?;
+        let mut req = self.http.post(url).json(&payload);
+        if let Some(ref cookies) = *YOUTUBE_COOKIE_HEADER {
+            req = req.header(COOKIE, cookies);
+        }
+
+        let json: Value = req.send().await?.json().await?;
 
         Ok(json)
     }
 
     pub async fn fetch_search_continuation_json(&self, continuation: &str) -> Result<Value> {
         let url = "https://www.youtube.com/youtubei/v1/search";
-        let payload = serde_json::json!({
+        let payload = json!({
             "continuation": continuation,
             "context": {
                 "client": {
@@ -148,14 +146,12 @@ impl<'a> InnertubeClient<'a> {
             }
         });
 
-        let json: Value = self
-            .http
-            .post(url)
-            .json(&payload)
-            .send()
-            .await?
-            .json()
-            .await?;
+        let mut req = self.http.post(url).json(&payload);
+        if let Some(ref cookies) = *YOUTUBE_COOKIE_HEADER {
+            req = req.header(COOKIE, cookies);
+        }
+
+        let json: Value = req.send().await?.json().await?;
 
         Ok(json)
     }

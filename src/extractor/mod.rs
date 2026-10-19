@@ -3,12 +3,14 @@ pub mod innertube;
 pub mod strategy;
 pub mod ytdlp;
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 pub use id::{extract_playlist_id, extract_video_id, is_youtube_url, youtube_id_to_i64};
 pub use innertube::InnertubeExtractor;
 use reqwest::Client;
 pub use strategy::MediaExtractor;
+use tokio::time::timeout;
+use tracing::debug;
 pub use ytdlp::YtDlpExtractor;
 
 use crate::{
@@ -34,27 +36,18 @@ impl YoutubeExtractor {
     }
 
     pub async fn extract_media(&self, target: &str) -> Result<ExtractedMedia> {
-        let mut primary_fut = self.primary.extract(target);
-        let mut fallback_fut = self.fallback.extract(target);
+        let innertube_result =
+            timeout(Duration::from_millis(1500), self.primary.extract(target)).await;
 
-        tokio::select! {
-            res = &mut primary_fut => {
-                match res {
-                    Ok(media) => Ok(media),
-                    Err(e) => {
-                        tracing::debug!("Primary Innertube extractor ({e}), waiting for yt-dlp...");
-                        fallback_fut.await
-                    }
-                }
+        match innertube_result {
+            Ok(Ok(media)) => Ok(media),
+            Ok(Err(e)) => {
+                debug!("Innertube extractor failed ({e}), invoking yt-dlp fallback...");
+                self.fallback.extract(target).await
             }
-            res = &mut fallback_fut => {
-                match res {
-                    Ok(media) => Ok(media),
-                    Err(e) => {
-                        tracing::debug!("Fallback yt-dlp failed ({e}), waiting for Innertube...");
-                        primary_fut.await
-                    }
-                }
+            Err(_) => {
+                debug!("Innertube extractor timed out (1.5s), invoking yt-dlp fallback...");
+                self.fallback.extract(target).await
             }
         }
     }

@@ -1,4 +1,6 @@
-use std::{future::Future, path::Path, pin::Pin};
+use std::{
+    env, future::Future, path::Path, pin::Pin, process::Command as StdCommand, sync::OnceLock,
+};
 
 use tokio::process::Command;
 
@@ -7,6 +9,9 @@ use crate::{
     error::{Result, YoutubeAudioError},
     models::{AudioFormat, AudioQuality, AudioStreamInfo, ExtractedMedia, VideoMetadata},
 };
+
+static CACHED_CMD: OnceLock<Option<String>> = OnceLock::new();
+static CACHED_JS_RUNTIME: OnceLock<Option<&'static str>> = OnceLock::new();
 
 #[derive(Default, Clone)]
 pub struct YtDlpExtractor {
@@ -27,23 +32,29 @@ impl YtDlpExtractor {
     }
 
     pub async fn find_cmd() -> Result<String> {
-        let home = std::env::var("HOME").unwrap_or_default();
+        if let Some(cached) = CACHED_CMD.get() {
+            return cached.clone().ok_or(YoutubeAudioError::YtDlpNotFound);
+        }
+
+        let home = env::var("HOME").unwrap_or_default();
         let candidates = [
             format!("{home}/.local/bin/yt-dlp"),
             "./yt-dlp".to_string(),
             "yt-dlp".to_string(),
         ];
         for candidate in candidates {
-            if std::path::Path::new(&candidate).exists()
+            if Path::new(&candidate).exists()
                 || Command::new(&candidate)
                     .arg("--version")
                     .output()
                     .await
                     .is_ok()
             {
+                let _ = CACHED_CMD.set(Some(candidate.clone()));
                 return Ok(candidate);
             }
         }
+        let _ = CACHED_CMD.set(None);
         Err(YoutubeAudioError::YtDlpNotFound)
     }
 
@@ -52,12 +63,22 @@ impl YtDlpExtractor {
         let mut cmd = Command::new(cmd_path);
         cmd.kill_on_drop(true);
 
-        if Command::new("node").arg("--version").output().await.is_ok() {
-            cmd.args(["--js-runtimes", "node"]);
+        let js_runtime = *CACHED_JS_RUNTIME.get_or_init(|| {
+            if StdCommand::new("deno").arg("--version").output().is_ok() {
+                Some("deno")
+            } else if StdCommand::new("node").arg("--version").output().is_ok() {
+                Some("node")
+            } else {
+                None
+            }
+        });
+
+        if let Some(runtime) = js_runtime {
+            cmd.args(["--js-runtimes", runtime]);
         }
+
         cmd.args([
             "--no-config",
-            "--no-cache-dir",
             "--no-check-certificates",
             "--no-call-home",
             "--socket-timeout",

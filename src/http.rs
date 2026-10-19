@@ -1,6 +1,39 @@
-use std::time::Duration;
+use std::{env, fs, path::PathBuf, sync::LazyLock, time::Duration};
 
 use reqwest::{Client, Proxy};
+
+pub static YOUTUBE_COOKIE_HEADER: LazyLock<Option<String>> =
+    LazyLock::new(load_youtube_cookie_header);
+
+pub fn load_youtube_cookie_header() -> Option<String> {
+    let home = env::var("HOME").unwrap_or_default();
+    let candidates = [
+        PathBuf::from("./cookies.txt"),
+        PathBuf::from(format!("{home}/.config/vortex-dl/cookies.txt")),
+    ];
+
+    for path in &candidates {
+        if path.exists()
+            && let Ok(content) = fs::read_to_string(path)
+        {
+            let mut cookies = Vec::new();
+            for line in content.lines() {
+                let trimmed = line.trim();
+                if trimmed.starts_with('#') || trimmed.is_empty() {
+                    continue;
+                }
+                let parts: Vec<&str> = trimmed.split('\t').collect();
+                if parts.len() >= 7 && parts[0].contains("youtube.com") {
+                    cookies.push(format!("{}={}", parts[5], parts[6]));
+                }
+            }
+            if !cookies.is_empty() {
+                return Some(cookies.join("; "));
+            }
+        }
+    }
+    None
+}
 
 pub fn create_http_client() -> Client {
     create_http_client_with_proxy(None)
@@ -12,8 +45,8 @@ pub fn create_http_client_with_proxy(proxy_url: Option<&str>) -> Client {
         .tcp_nodelay(true)
         .pool_max_idle_per_host(20)
         .pool_idle_timeout(Duration::from_secs(120))
-        .connect_timeout(Duration::from_secs(15))
-        .read_timeout(Duration::from_secs(45));
+        .connect_timeout(Duration::from_secs(8))
+        .read_timeout(Duration::from_secs(30));
 
     if let Some(proxy_str) = proxy_url
         && !proxy_str.is_empty()
