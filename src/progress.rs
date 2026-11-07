@@ -27,3 +27,4 @@ pub enum ProgressEvent {
 }
 
 pub type ProgressHandler = Arc<dyn Fn(ProgressEvent) + Send + Sync + 'static>;
+pub type ProgressCallback = Arc<dyn Fn(u64, Option<u64>) + Send + Sync>;

@@ -19,6 +19,20 @@ pub fn parse_duration_str(s: &str) -> u64 {
 }
 
 pub fn parse_player_response(video_id: &str, json: &Value) -> Result<ExtractedMedia> {
+    if let Some(playability) = json.get("playabilityStatus") {
+        let status = playability
+            .get("status")
+            .and_then(|v| v.as_str())
+            .unwrap_or("OK");
+        if status != "OK" {
+            let reason = playability
+                .get("reason")
+                .and_then(|v| v.as_str())
+                .unwrap_or("Track is unplayable");
+            return Err(YoutubeAudioError::DownloadFailed(format!("{status}: {reason}")));
+        }
+    }
+
     let details = json
         .get("videoDetails")
         .ok_or_else(|| YoutubeAudioError::DownloadFailed("Missing videoDetails".into()))?;
@@ -60,29 +74,37 @@ pub fn parse_player_response(video_id: &str, json: &Value) -> Result<ExtractedMe
     };
 
     let mut streams = Vec::new();
-    let mut all_formats = Vec::new();
+    let mut target_formats = Vec::new();
 
     if let Some(streaming_data) = json.get("streamingData") {
         if let Some(adaptive) = streaming_data
             .get("adaptiveFormats")
             .and_then(|v| v.as_array())
         {
-            all_formats.extend(adaptive.iter());
+            for fmt in adaptive {
+                let mime = fmt.get("mimeType").and_then(|v| v.as_str()).unwrap_or("");
+                if mime.starts_with("audio/") {
+                    target_formats.push(fmt);
+                }
+            }
         }
-        if let Some(formats) = streaming_data.get("formats").and_then(|v| v.as_array()) {
-            all_formats.extend(formats.iter());
+        if target_formats.is_empty() {
+            if let Some(formats) = streaming_data.get("formats").and_then(|v| v.as_array()) {
+                for fmt in formats {
+                    let mime = fmt.get("mimeType").and_then(|v| v.as_str()).unwrap_or("");
+                    if mime.starts_with("audio/")
+                        || fmt.get("audioQuality").is_some()
+                        || fmt.get("audioSampleRate").is_some()
+                    {
+                        target_formats.push(fmt);
+                    }
+                }
+            }
         }
     }
 
-    for fmt in all_formats {
+    for fmt in target_formats {
         let mime = fmt.get("mimeType").and_then(|v| v.as_str()).unwrap_or("");
-        let is_audio_only = mime.starts_with("audio/");
-        let has_audio = is_audio_only
-            || fmt.get("audioQuality").is_some()
-            || fmt.get("audioSampleRate").is_some();
-        if !has_audio {
-            continue;
-        }
 
         let Some(direct_url) = fmt
             .get("url")

@@ -60,7 +60,7 @@ pub fn create_http_client_with_proxy(proxy_url: Option<&str>) -> Client {
 
 pub fn select_user_agent_for_url(url: &str) -> &'static str {
     if url.contains("c=ANDROID_VR") {
-        "com.google.android.apps.youtube.vr/1.56.21 (Linux; U; Android 12; en_US)"
+        "com.google.android.apps.youtube.vr.oculus/1.65.10 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip"
     } else if url.contains("c=ANDROID_MUSIC") {
         "com.google.android.apps.youtube.music/6.42.52 (Linux; U; Android 14; en_US)"
     } else if url.contains("c=ANDROID") {

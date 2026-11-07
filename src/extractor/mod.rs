@@ -61,7 +61,14 @@ impl YoutubeExtractor {
     }
 
     pub async fn fetch_fallback(video_url: &str) -> Result<(VideoMetadata, String)> {
-        let extractor = YtDlpExtractor::default();
+        Self::fetch_fallback_with_proxy(video_url, None).await
+    }
+
+    pub async fn fetch_fallback_with_proxy(
+        video_url: &str,
+        proxy: Option<String>,
+    ) -> Result<(VideoMetadata, String)> {
+        let extractor = YtDlpExtractor::with_proxy(proxy);
         let media = extractor.extract(video_url).await?;
         let url = media
             .best_stream()

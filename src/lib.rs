@@ -1,3 +1,4 @@
+pub mod client;
 pub mod converter;
 pub mod downloader;
 pub mod error;
@@ -8,8 +9,9 @@ pub mod progress;
 pub mod streamer;
 
 use bytes::Bytes;
+pub use client::{Client, ClientBuilder, ProxyUrlProvider, RetryConfig};
 pub use downloader::YoutubeAudioDownloader;
-pub use error::{Result, YoutubeAudioError};
+pub use error::{Error, Result, YoutubeAudioError};
 pub use extractor::{extract_playlist_id, extract_video_id, is_youtube_url, youtube_id_to_i64};
 use futures_util::Stream;
 pub use http::{create_http_client, create_http_client_with_proxy, select_user_agent_for_url};
@@ -17,7 +19,7 @@ pub use models::{
     AudioFormat, AudioQuality, AudioStreamInfo, AudioStreamResponse, DownloadedAudio,
     ExtractedMedia, VideoMetadata,
 };
-pub use progress::{ProgressEvent, ProgressHandler};
+pub use progress::{ProgressCallback, ProgressEvent, ProgressHandler};
 pub use streamer::AudioStreamer;
 
 pub async fn download_audio<P: AsRef<std::path::Path>>(

@@ -84,7 +84,7 @@ impl YtDlpExtractor {
             "--socket-timeout",
             "5",
             "--extractor-args",
-            "youtube:player_client=web_embedded,android_vr;skip=hls,dash",
+            "youtube:player_client=android_vr;skip=hls,dash",
         ]);
 
         if let Some(ref proxy) = self.proxy

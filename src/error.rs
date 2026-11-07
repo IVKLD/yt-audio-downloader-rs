@@ -8,7 +8,7 @@ pub enum YoutubeAudioError {
     #[error("Failed to parse video ID: {0}")]
     VideoIdNotFound(String),
 
-    #[error("HTTP error: {0}")]
+    #[error("HTTP request failed: {0}")]
     HttpRequest(#[from] reqwest::Error),
 
     #[error("IO error: {0}")]
@@ -16,6 +16,15 @@ pub enum YoutubeAudioError {
 
     #[error("JSON error: {0}")]
     JsonParse(#[from] serde_json::Error),
+
+    #[error("Task join failed: {0}")]
+    Join(#[from] tokio::task::JoinError),
+
+    #[error("URL parsing failed: {0}")]
+    UrlParse(#[from] url::ParseError),
+
+    #[error("HTTP {status}: {message}")]
+    HttpStatus { status: u16, message: String },
 
     #[error("No audio stream found")]
     NoAudioStreamFound,
@@ -34,9 +43,42 @@ pub enum YoutubeAudioError {
 
     #[error("Download failed: {0}")]
     DownloadFailed(String),
+
+    #[error("{0}")]
+    Other(String),
 }
 
+pub type Error = YoutubeAudioError;
 pub type Result<T> = std::result::Result<T, YoutubeAudioError>;
+
+impl YoutubeAudioError {
+    pub fn new(msg: impl Into<String>) -> Self {
+        Self::Other(msg.into())
+    }
+
+    pub fn with_status(status: u16, msg: impl Into<String>) -> Self {
+        Self::HttpStatus {
+            status,
+            message: msg.into(),
+        }
+    }
+
+    pub fn is_status(&self, code: u16) -> bool {
+        match self {
+            Self::HttpStatus { status, .. } => *status == code,
+            Self::HttpRequest(err) => err.status().map_or(false, |s| s.as_u16() == code),
+            _ => false,
+        }
+    }
+
+    pub fn status_code(&self) -> Option<u16> {
+        match self {
+            Self::HttpStatus { status, .. } => Some(*status),
+            Self::HttpRequest(err) => err.status().map(|s| s.as_u16()),
+            _ => None,
+        }
+    }
+}
 
 fn clean_ytdlp_stderr(stderr: &str) -> String {
     if stderr.contains("Sign in to confirm you’re not a bot")

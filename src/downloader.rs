@@ -1,9 +1,6 @@
 use std::{
     path::{Path, PathBuf},
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::Arc,
 };
 
 use bytes::Bytes;
@@ -18,7 +15,7 @@ use crate::{
     converter::{AudioConverter, sanitize_filename},
     error::{Result, YoutubeAudioError},
     extractor::{InnertubeExtractor, YoutubeExtractor, YtDlpExtractor, extract_video_id},
-    http::{create_http_client, select_user_agent_for_url},
+    http::create_http_client,
     models::{AudioFormat, AudioQuality, AudioStreamResponse, DownloadedAudio, VideoMetadata},
     progress::{ProgressEvent, ProgressHandler},
     streamer::AudioStreamer,
@@ -26,6 +23,7 @@ use crate::{
 
 pub struct YoutubeAudioDownloader {
     client: Client,
+    proxy: Option<String>,
     output_dir: PathBuf,
     output_file: Option<PathBuf>,
     format: AudioFormat,
@@ -39,6 +37,7 @@ impl Default for YoutubeAudioDownloader {
     fn default() -> Self {
         Self {
             client: create_http_client(),
+            proxy: None,
             output_dir: PathBuf::from("downloads"),
             output_file: None,
             format: AudioFormat::Mp3,
@@ -57,6 +56,11 @@ impl YoutubeAudioDownloader {
 
     pub fn client(mut self, client: Client) -> Self {
         self.client = client;
+        self
+    }
+
+    pub fn proxy<S: Into<String>>(mut self, proxy: S) -> Self {
+        self.proxy = Some(proxy.into());
         self
     }
 
@@ -105,7 +109,7 @@ impl YoutubeAudioDownloader {
     }
 
     pub async fn fetch_metadata(&self, url_or_id: &str) -> Result<VideoMetadata> {
-        let extractor = YoutubeExtractor::new(self.client.clone());
+        let extractor = YoutubeExtractor::with_proxy(self.client.clone(), self.proxy.clone());
         let media = extractor.extract_media(url_or_id).await?;
         Ok(media.metadata)
     }
@@ -155,7 +159,7 @@ impl YoutubeAudioDownloader {
             return self.download_fallback(url_or_id).await;
         }
 
-        let extractor = YoutubeExtractor::new(self.client.clone());
+        let extractor = YoutubeExtractor::with_proxy(self.client.clone(), self.proxy.clone());
         match extractor.extract_media(&video_id).await {
             Ok(media) => {
                 let Some(best_stream) = media.best_stream().cloned() else {
@@ -172,8 +176,16 @@ impl YoutubeAudioDownloader {
                     .output_dir
                     .join(format!("temp_{video_id}.{}", best_stream.container));
 
+                let stream_response = AudioStreamResponse {
+                    metadata: metadata.clone(),
+                    stream_url: best_stream.url.clone(),
+                    mime_type: best_stream.mime_type.clone(),
+                    content_length: best_stream.content_length,
+                    stream_info: best_stream.clone(),
+                };
+
                 if let Err(err) = self
-                    .download_stream_to_file(&best_stream.url, &temp_path)
+                    .download_stream_to_file(stream_response, &temp_path)
                     .await
                 {
                     let _ = tokio::fs::remove_file(&temp_path).await;
@@ -233,151 +245,26 @@ impl YoutubeAudioDownloader {
         }
     }
 
-    async fn download_stream_to_file(&self, stream_url: &str, output_path: &Path) -> Result<()> {
-        let user_agent = select_user_agent_for_url(stream_url);
-
-        let probe = self
-            .client
-            .get(stream_url)
-            .header(reqwest::header::USER_AGENT, user_agent)
-            .header(reqwest::header::RANGE, "bytes=0-0")
-            .send()
-            .await;
-
-        let total_size = match probe {
-            Ok(ref res) => res
-                .headers()
-                .get(reqwest::header::CONTENT_RANGE)
-                .and_then(|v| v.to_str().ok())
-                .and_then(|s| s.rfind('/').map(|i| &s[i + 1..]))
-                .and_then(|s| s.parse::<u64>().ok())
-                .or_else(|| res.content_length()),
-            Err(_) => None,
-        };
-
-        if let Some(total_bytes) = total_size
-            && total_bytes > 0
-        {
-            return self
-                .download_chunked_parallel(stream_url, user_agent, output_path, total_bytes)
-                .await;
-        }
-
-        self.download_sequential(stream_url, user_agent, output_path)
-            .await
-    }
-
-    async fn download_chunked_parallel(
+    async fn download_stream_to_file(
         &self,
-        stream_url: &str,
-        user_agent: &'static str,
+        stream_response: AudioStreamResponse,
         output_path: &Path,
-        total_bytes: u64,
     ) -> Result<()> {
-        const CHUNK_SIZE: u64 = 1024 * 1024; // 1 MB slices bypass YouTube CDN throttling
-        let num_chunks = total_bytes.div_ceil(CHUNK_SIZE);
-
-        let downloaded_bytes = Arc::new(AtomicU64::new(0));
-
-        let chunks: Vec<(usize, u64, u64)> = (0..num_chunks)
-            .map(|i| {
-                let start = i * CHUNK_SIZE;
-                let end = std::cmp::min(start + CHUNK_SIZE - 1, total_bytes - 1);
-                (i as usize, start, end)
-            })
-            .collect();
-
-        let client = self.client.clone();
-        let downloaded_ref = downloaded_bytes.clone();
-        let url = stream_url.to_string();
-
-        let mut stream = futures_util::stream::iter(chunks)
-            .map(|(idx, start, end)| {
-                let client = client.clone();
-                let url = url.clone();
-                let downloaded = downloaded_ref.clone();
-                async move {
-                    let resp = client
-                        .get(&url)
-                        .header(reqwest::header::USER_AGENT, user_agent)
-                        .header(reqwest::header::RANGE, format!("bytes={start}-{end}"))
-                        .send()
-                        .await?;
-
-                    if !resp.status().is_success() && resp.status().as_u16() != 206 {
-                        return Err(YoutubeAudioError::DownloadFailed(format!(
-                            "HTTP status {}",
-                            resp.status()
-                        )));
-                    }
-
-                    let bytes = resp.bytes().await?;
-                    let downloaded_total = downloaded
-                        .fetch_add(bytes.len() as u64, Ordering::Relaxed)
-                        + bytes.len() as u64;
-
-                    self.emit_progress(ProgressEvent::Downloading {
-                        bytes_downloaded: downloaded_total,
-                        total_bytes: Some(total_bytes),
-                        percentage: Some((downloaded_total as f32 / total_bytes as f32) * 100.0),
-                    });
-
-                    Ok::<(usize, Bytes), YoutubeAudioError>((idx, bytes))
-                }
-            })
-            .buffer_unordered(6);
-
-        let mut collected: Vec<(usize, Bytes)> = Vec::with_capacity(num_chunks as usize);
-        while let Some(res) = stream.next().await {
-            collected.push(res?);
-        }
-
-        collected.sort_by_key(|(idx, _)| *idx);
-
+        let total_size = stream_response.content_length;
+        let streamer = AudioStreamer::new(self.client.clone());
+        let (_, mut stream) = streamer.stream_from_info(stream_response, 0, None).await?;
         let mut writer = BufWriter::new(File::create(output_path).await?);
-        for (_, chunk) in collected {
-            writer.write_all(&chunk).await?;
-        }
-        writer.flush().await?;
-
-        Ok(())
-    }
-
-    async fn download_sequential(
-        &self,
-        stream_url: &str,
-        user_agent: &'static str,
-        output_path: &Path,
-    ) -> Result<()> {
-        let resp = self
-            .client
-            .get(stream_url)
-            .header(reqwest::header::USER_AGENT, user_agent)
-            .send()
-            .await?;
-
-        if !resp.status().is_success() {
-            return Err(YoutubeAudioError::DownloadFailed(format!(
-                "HTTP {}",
-                resp.status()
-            )));
-        }
-
-        let total_bytes = resp.content_length();
         let mut downloaded: u64 = 0;
-        let mut stream = resp.bytes_stream();
-        let mut writer = BufWriter::new(File::create(output_path).await?);
 
         while let Some(chunk_res) = stream.next().await {
             let chunk = chunk_res?;
             writer.write_all(&chunk).await?;
             downloaded += chunk.len() as u64;
 
-            let percentage = total_bytes.map(|total| (downloaded as f32 / total as f32) * 100.0);
             self.emit_progress(ProgressEvent::Downloading {
                 bytes_downloaded: downloaded,
-                total_bytes,
-                percentage,
+                total_bytes: total_size,
+                percentage: total_size.map(|t| (downloaded as f32 / t as f32) * 100.0),
             });
         }
 
@@ -386,7 +273,8 @@ impl YoutubeAudioDownloader {
     }
 
     async fn download_fallback(&self, url_or_id: &str) -> Result<DownloadedAudio> {
-        let (metadata, _) = YoutubeExtractor::fetch_fallback(url_or_id).await?;
+        let (metadata, _) =
+            YoutubeExtractor::fetch_fallback_with_proxy(url_or_id, self.proxy.clone()).await?;
 
         self.emit_progress(ProgressEvent::MetadataFetched {
             title: metadata.title.clone(),
@@ -401,7 +289,7 @@ impl YoutubeAudioDownloader {
             .unwrap_or("output");
         let output_template = target_dir.join(format!("{target_stem}.%(ext)s"));
 
-        let ytdlp = YtDlpExtractor::default();
+        let ytdlp = YtDlpExtractor::with_proxy(self.proxy.clone());
         ytdlp
             .download_audio(
                 url_or_id,

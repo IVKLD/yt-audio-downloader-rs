@@ -94,27 +94,35 @@ impl MediaExtractor for InnertubeExtractor {
             let video_id = extract_video_id(target)?;
             let innertube_client = InnertubeClient::new(&self.client);
 
+            let mut last_err;
+
             // Fast-path: ANDROID_VR gives direct unthrottled audio streams (opus/m4a) without cipher
-            if let Ok(json) = innertube_client
-                .fetch_player_json(&video_id, "ANDROID_VR", "1.56.21")
+            match innertube_client
+                .fetch_player_json(&video_id, "ANDROID_VR", "1.65.10")
                 .await
-                && let Ok(media) = parse_player_response(&video_id, &json)
-                && !media.streams.is_empty()
             {
-                return Ok(media);
+                Ok(json) => match parse_player_response(&video_id, &json) {
+                    Ok(media) if !media.streams.is_empty() => return Ok(media),
+                    Ok(_) => last_err = YoutubeAudioError::NoAudioStreamFound,
+                    Err(e) => last_err = e,
+                },
+                Err(e) => last_err = e,
             }
 
             // Fallback Innertube: WEB client
-            if let Ok(json) = innertube_client
+            match innertube_client
                 .fetch_player_json(&video_id, "WEB", "2.20240725.01.00")
                 .await
-                && let Ok(media) = parse_player_response(&video_id, &json)
-                && !media.streams.is_empty()
             {
-                return Ok(media);
+                Ok(json) => match parse_player_response(&video_id, &json) {
+                    Ok(media) if !media.streams.is_empty() => return Ok(media),
+                    Ok(_) => {}
+                    Err(e) => last_err = e,
+                },
+                Err(e) => last_err = e,
             }
 
-            Err(YoutubeAudioError::NoAudioStreamFound)
+            Err(last_err)
         })
     }
 }

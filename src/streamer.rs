@@ -200,7 +200,7 @@ impl AudioStreamer {
             req = req.header(reqwest::header::RANGE, format!("bytes={start_offset}-"));
         }
 
-        let http_response = req.send().await?;
+        let http_response = req.send().await?.error_for_status()?;
         Ok((response_info, Box::pin(http_response.bytes_stream())))
     }
 }

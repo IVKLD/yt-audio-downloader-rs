@@ -88,9 +88,63 @@ async fn test_search_youtube() {
     let results = yt_audio_downloader::search_youtube("Never Gonna Give You Up", 5)
         .await
         .unwrap();
-    println!("Search results count: {}", results.len());
-    for r in &results {
-        println!(" - {} ({}) [{}]", r.title, r.author, r.id);
+    assert!(!results.is_empty());
+}
+
+#[tokio::test]
+async fn test_bench_streams() {
+    let client = yt_audio_downloader::Client::new().await.unwrap();
+    let video_ids = [
+        "dQw4w9WgXcQ",
+        "kJQP7kiw5Fk",
+        "9bZkp7q19f0",
+        "JGwWNGJdvx8",
+    ];
+
+    for vid in video_ids {
+        let start = std::time::Instant::now();
+        let res = client.resolve_stream(vid).await;
+        let elapsed = start.elapsed();
+        match res {
+            Ok(info) => {
+                assert!(!info.stream_url.is_empty());
+                assert!(elapsed < std::time::Duration::from_millis(1000));
+            }
+            Err(e) => {
+                panic!("Video {vid}: FAILED in {:?} with error: {e}", elapsed);
+            }
+        }
     }
+}
+
+#[tokio::test]
+async fn test_client_builder_and_operations() {
+    use std::sync::{Arc, Mutex};
+
+    use yt_audio_downloader::{ClientBuilder, ProxyUrlProvider};
+
+    let proxy_state = Arc::new(Mutex::new(None::<String>));
+    let proxy_state_clone = proxy_state.clone();
+    let provider = ProxyUrlProvider(Arc::new(move || proxy_state_clone.lock().unwrap().clone()));
+
+    let client = ClientBuilder::new()
+        .with_max_retries(2)
+        .with_proxy_provider(provider)
+        .build()
+        .await
+        .unwrap();
+
+    let meta = client.fetch_metadata(TEST_URL).await.unwrap();
+    assert_eq!(meta.id, TEST_VIDEO_ID);
+    assert!(!meta.title.is_empty());
+
+    let stream_res = client.resolve_stream(TEST_URL).await.unwrap();
+    assert_eq!(stream_res.metadata.id, TEST_VIDEO_ID);
+    assert!(!stream_res.stream_url.is_empty());
+
+    let (results, _) = client
+        .search_page("Never Gonna Give You Up", None)
+        .await
+        .unwrap();
     assert!(!results.is_empty());
 }
