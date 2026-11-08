@@ -19,10 +19,6 @@ pub struct YtDlpExtractor {
 }
 
 impl YtDlpExtractor {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     pub fn with_proxy(proxy: Option<String>) -> Self {
         Self { proxy }
     }
@@ -80,11 +76,10 @@ impl YtDlpExtractor {
         cmd.args([
             "--no-config",
             "--no-check-certificates",
-            "--no-call-home",
             "--socket-timeout",
             "5",
             "--extractor-args",
-            "youtube:player_client=android_vr;skip=hls,dash",
+            "youtube:player_client=web_embedded,web;skip=hls,dash",
         ]);
 
         if let Some(ref proxy) = self.proxy
@@ -227,8 +222,16 @@ impl MediaExtractor for YtDlpExtractor {
 
             let content_length = json
                 .get("filesize")
-                .or_else(|| json.get("filesize_approx"))
-                .and_then(|v| v.as_u64());
+                .and_then(|v| v.as_u64())
+                .or_else(|| json.get("filesize_approx").and_then(|v| v.as_u64()))
+                .or_else(|| {
+                    url::Url::parse(&stream_url).ok().and_then(|u| {
+                        u.query_pairs()
+                            .find(|(k, _)| k == "clen")
+                            .map(|(_, v)| v.into_owned())
+                            .and_then(|s| s.parse::<u64>().ok())
+                    })
+                });
 
             let ext = json
                 .get("ext")

@@ -1,57 +1,29 @@
-use yt_audio_downloader::{AudioFormat, AudioQuality, ProgressEvent, YoutubeAudioDownloader};
+use std::sync::Arc;
+
+use yt_audio_downloader::{AudioFormat, Client, ProgressCallback};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
 
-    let downloader = YoutubeAudioDownloader::new()
-        .output_dir("audio_output")
-        .format(AudioFormat::Flac)
-        .quality(AudioQuality::Best)
-        .embed_metadata(true)
-        .on_progress(|event| match event {
-            ProgressEvent::Initializing { video_id } => {
-                println!("[+] Initializing download for Video ID: {}", video_id);
-            }
-            ProgressEvent::MetadataFetched { title, author } => {
-                println!("[+] Found: '{}' by '{}'", title, author);
-            }
-            ProgressEvent::Downloading {
-                bytes_downloaded,
-                percentage,
-                ..
-            } => {
-                if let Some(pct) = percentage {
-                    print!(
-                        "\r[>] Downloading: {:.1}% ({} bytes)",
-                        pct, bytes_downloaded
-                    );
-                } else {
-                    print!("\r[>] Downloading: {} bytes", bytes_downloaded);
-                }
-            }
-            ProgressEvent::Converting { target_format } => {
-                println!("\n[*] Converting audio to {} format...", target_format);
-            }
-            ProgressEvent::Finished {
-                output_path,
-                total_bytes,
-            } => {
-                println!(
-                    "\n[✓] Successfully downloaded to {:?} ({} bytes)",
-                    output_path, total_bytes
-                );
-            }
-            ProgressEvent::Error { message } => {
-                eprintln!("\n[!] Error: {}", message);
-            }
-        });
+    let client = Client::new()?;
 
-    let metadata = downloader.fetch_metadata(url).await?;
+    let metadata = client.fetch_metadata(url).await?;
     println!("Video Title: {}", metadata.title);
     println!("Duration: {} seconds", metadata.duration_seconds);
 
-    let result = downloader.download(url).await?;
+    let progress_cb: ProgressCallback = Arc::new(|downloaded, total: Option<u64>| {
+        if let Some(t) = total {
+            print!("\r[>] Downloading: {:.1}% ({downloaded}/{t} bytes)", (downloaded as f64 / t as f64) * 100.0);
+        } else {
+            print!("\r[>] Downloading: {downloaded} bytes");
+        }
+    });
+
+    let output_file = std::path::Path::new("audio_output/song.flac");
+    let result = client
+        .download(url, output_file, AudioFormat::Flac, Some(&progress_cb))
+        .await?;
     println!("\nAudio file successfully saved at: {:?}", result.file_path);
 
     Ok(())

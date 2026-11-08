@@ -387,9 +387,3 @@ pub fn parse_search_results_with_token(json: &Value) -> (Vec<VideoMetadata>, Opt
 
     (tracks, continuation_token)
 }
-
-pub fn parse_search_results(json: &Value, limit: usize) -> Vec<VideoMetadata> {
-    let (mut tracks, _) = parse_search_results_with_token(json);
-    tracks.truncate(limit);
-    tracks
-}

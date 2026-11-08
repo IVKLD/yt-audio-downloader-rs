@@ -1,18 +1,15 @@
-use std::{fmt, path::Path, pin::Pin, sync::Arc};
+use std::{fmt, path::Path, sync::Arc};
 
-use bytes::Bytes;
-use futures_util::Stream;
 use tokio::sync::RwLock;
 
 use crate::{
-    client::builder::ClientBuilder,
     downloader::YoutubeAudioDownloader,
     error::YoutubeAudioError,
     extractor::{InnertubeExtractor, YoutubeExtractor},
     http::create_http_client_with_proxy,
     models::{AudioFormat, AudioQuality, AudioStreamResponse, DownloadedAudio, VideoMetadata},
-    progress::{ProgressCallback, ProgressEvent},
-    streamer::AudioStreamer,
+    progress::ProgressCallback,
+    streamer::{AudioByteStream, AudioStreamer},
 };
 
 #[derive(Clone)]
@@ -57,24 +54,64 @@ impl fmt::Debug for Client {
     }
 }
 
-impl Client {
-    /// Create a new `Client` with default settings.
-    pub async fn new() -> Result<Self, YoutubeAudioError> {
-        ClientBuilder::new().build().await
+/// Builder for configuring and initializing a [`Client`] instance.
+#[derive(Debug, Default)]
+pub struct ClientBuilder {
+    pub retry_config: RetryConfig,
+    pub proxy_url: Option<String>,
+    pub proxy_provider: Option<ProxyUrlProvider>,
+    pub prefer_yt_dlp: bool,
+}
+
+impl ClientBuilder {
+    pub fn new() -> Self {
+        Self::default()
     }
 
-    pub(crate) async fn from_builder(builder: ClientBuilder) -> Result<Self, YoutubeAudioError> {
-        let http_client = Self::build_http_client(builder.proxy_url.as_deref())?;
-        let active_proxy = builder.proxy_url.clone();
+    pub fn with_max_retries(mut self, max_retries: u32) -> Self {
+        self.retry_config.max_retries = max_retries;
+        self
+    }
 
-        Ok(Self {
+    pub fn with_proxy(mut self, proxy_url: impl Into<String>) -> Self {
+        self.proxy_url = Some(proxy_url.into());
+        self
+    }
+
+    pub fn with_proxy_provider(mut self, provider: ProxyUrlProvider) -> Self {
+        self.proxy_provider = Some(provider);
+        self
+    }
+
+    pub fn with_prefer_yt_dlp(mut self, prefer: bool) -> Self {
+        self.prefer_yt_dlp = prefer;
+        self
+    }
+
+    pub fn build(self) -> Result<Client, YoutubeAudioError> {
+        let http_client = Client::build_http_client(self.proxy_url.as_deref())?;
+        let active_proxy = self.proxy_url.clone();
+
+        Ok(Client {
             http_client: RwLock::new(http_client),
-            proxy_url: builder.proxy_url,
-            proxy_provider: builder.proxy_provider,
+            proxy_url: self.proxy_url,
+            proxy_provider: self.proxy_provider,
             active_proxy: RwLock::new(active_proxy),
-            retry_config: builder.retry_config,
-            prefer_yt_dlp: builder.prefer_yt_dlp,
+            retry_config: self.retry_config,
+            prefer_yt_dlp: self.prefer_yt_dlp,
         })
+    }
+}
+
+impl Client {
+    /// Create a new `Client` with default settings.
+    pub fn new() -> Result<Self, YoutubeAudioError> {
+        ClientBuilder::default().build()
+    }
+
+    /// Create a new `ClientBuilder` to customize client options.
+    pub fn builder() -> ClientBuilder {
+        ClientBuilder::default()
     }
 
     /// Attach a dynamic proxy provider to this client.
@@ -118,6 +155,11 @@ impl Client {
         self.http_client.read().await.clone()
     }
 
+    async fn session(&self) -> Result<(reqwest::Client, Option<String>), YoutubeAudioError> {
+        self.ensure_proxy_refreshed().await?;
+        Ok((self.get_http_client().await, self.current_proxy_url().await))
+    }
+
     /// Perform a quick check to see if YouTube is accessible.
     pub async fn health_check(&self) -> bool {
         self.fetch_metadata("dQw4w9WgXcQ").await.is_ok()
@@ -128,9 +170,7 @@ impl Client {
         &self,
         url_or_id: &str,
     ) -> Result<VideoMetadata, YoutubeAudioError> {
-        self.ensure_proxy_refreshed().await?;
-        let client = self.get_http_client().await;
-        let proxy = self.current_proxy_url().await;
+        let (client, proxy) = self.session().await?;
         let extractor = YoutubeExtractor::with_proxy(client, proxy);
         let media = extractor.extract_media(url_or_id).await?;
         Ok(media.metadata)
@@ -141,10 +181,8 @@ impl Client {
         &self,
         url_or_id: &str,
     ) -> Result<Vec<VideoMetadata>, YoutubeAudioError> {
-        self.ensure_proxy_refreshed().await?;
-        let client = self.get_http_client().await;
-        let extractor = InnertubeExtractor::new(client);
-        extractor.fetch_playlist(url_or_id).await
+        let (client, _) = self.session().await?;
+        InnertubeExtractor::new(client).fetch_playlist(url_or_id).await
     }
 
     /// Search YouTube for videos matching a query.
@@ -153,10 +191,8 @@ impl Client {
         query: &str,
         limit: usize,
     ) -> Result<Vec<VideoMetadata>, YoutubeAudioError> {
-        self.ensure_proxy_refreshed().await?;
-        let client = self.get_http_client().await;
-        let extractor = InnertubeExtractor::new(client);
-        extractor.search(query, limit).await
+        let (client, _) = self.session().await?;
+        InnertubeExtractor::new(client).search(query, limit).await
     }
 
     /// Search YouTube with pagination support (continuation token).
@@ -165,10 +201,10 @@ impl Client {
         query: &str,
         continuation: Option<&str>,
     ) -> Result<(Vec<VideoMetadata>, Option<String>), YoutubeAudioError> {
-        self.ensure_proxy_refreshed().await?;
-        let client = self.get_http_client().await;
-        let extractor = InnertubeExtractor::new(client);
-        extractor.search_page(query, continuation).await
+        let (client, _) = self.session().await?;
+        InnertubeExtractor::new(client)
+            .search_page(query, continuation)
+            .await
     }
 
     /// Resolve audio stream info and direct media URL.
@@ -176,11 +212,27 @@ impl Client {
         &self,
         url_or_id: &str,
     ) -> Result<AudioStreamResponse, YoutubeAudioError> {
-        self.ensure_proxy_refreshed().await?;
-        let client = self.get_http_client().await;
-        let proxy = self.current_proxy_url().await;
+        let (client, proxy) = self.session().await?;
         AudioStreamer::with_proxy(client, proxy)
             .get_stream_response(url_or_id)
+            .await
+    }
+
+    /// Stream audio bytes for a previously resolved [`AudioStreamResponse`] within an optional byte range.
+    ///
+    /// # Arguments
+    /// * `info` - Audio stream response previously resolved via [`Client::resolve_stream`].
+    /// * `start_offset` - Starting byte offset (0-indexed).
+    /// * `end_offset` - Optional ending byte offset (inclusive).
+    pub async fn stream_from_info(
+        &self,
+        info: &AudioStreamResponse,
+        start_offset: u64,
+        end_offset: Option<u64>,
+    ) -> Result<AudioByteStream, YoutubeAudioError> {
+        let (client, proxy) = self.session().await?;
+        AudioStreamer::with_proxy(client, proxy)
+            .stream_from_info(info, start_offset, end_offset)
             .await
     }
 
@@ -188,16 +240,8 @@ impl Client {
     pub async fn stream_bytes(
         &self,
         url_or_id: &str,
-    ) -> Result<
-        (
-            VideoMetadata,
-            Pin<Box<dyn Stream<Item = reqwest::Result<Bytes>> + Send>>,
-        ),
-        YoutubeAudioError,
-    > {
-        self.ensure_proxy_refreshed().await?;
-        let client = self.get_http_client().await;
-        let proxy = self.current_proxy_url().await;
+    ) -> Result<(VideoMetadata, AudioByteStream), YoutubeAudioError> {
+        let (client, proxy) = self.session().await?;
         AudioStreamer::with_proxy(client, proxy)
             .stream_bytes(url_or_id)
             .await
@@ -211,34 +255,18 @@ impl Client {
         format: AudioFormat,
         on_progress: Option<&ProgressCallback>,
     ) -> Result<DownloadedAudio, YoutubeAudioError> {
-        self.ensure_proxy_refreshed().await?;
-        let client = self.get_http_client().await;
-        let proxy = self.current_proxy_url().await;
+        let (client, proxy) = self.session().await?;
 
-        let mut downloader = YoutubeAudioDownloader::new()
-            .client(client)
-            .output_file(output_file)
-            .format(format)
-            .quality(AudioQuality::Best)
-            .prefer_yt_dlp(self.prefer_yt_dlp);
-
-        if let Some(p) = proxy {
-            downloader = downloader.proxy(p);
-        }
-
-        if let Some(cb) = on_progress {
-            let cb = cb.clone();
-            downloader = downloader.on_progress(move |event| {
-                if let ProgressEvent::Downloading {
-                    bytes_downloaded,
-                    total_bytes,
-                    ..
-                } = event
-                {
-                    cb(bytes_downloaded, total_bytes);
-                }
-            });
-        }
+        let downloader = YoutubeAudioDownloader {
+            client,
+            proxy,
+            output_file: Some(output_file.to_path_buf()),
+            format,
+            quality: AudioQuality::Best,
+            progress: on_progress.cloned(),
+            prefer_yt_dlp: self.prefer_yt_dlp,
+            ..Default::default()
+        };
 
         downloader.download(url_or_id).await
     }

@@ -1,5 +1,3 @@
-mod builder;
 mod client;
 
-pub use builder::ClientBuilder;
-pub use client::{Client, ProxyUrlProvider, RetryConfig};
+pub use client::{Client, ClientBuilder, ProxyUrlProvider, RetryConfig};

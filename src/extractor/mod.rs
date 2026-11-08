@@ -3,19 +3,18 @@ pub mod innertube;
 pub mod strategy;
 pub mod ytdlp;
 
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 pub use id::{extract_playlist_id, extract_video_id, is_youtube_url, youtube_id_to_i64};
 pub use innertube::InnertubeExtractor;
 use reqwest::Client;
 pub use strategy::MediaExtractor;
-use tokio::time::timeout;
 use tracing::debug;
 pub use ytdlp::YtDlpExtractor;
 
 use crate::{
     error::Result,
-    models::{AudioStreamInfo, ExtractedMedia, VideoMetadata},
+    models::ExtractedMedia,
 };
 
 pub struct YoutubeExtractor {
@@ -24,10 +23,6 @@ pub struct YoutubeExtractor {
 }
 
 impl YoutubeExtractor {
-    pub fn new(client: Client) -> Self {
-        Self::with_proxy(client, None)
-    }
-
     pub fn with_proxy(client: Client, proxy: Option<String>) -> Self {
         Self {
             primary: Arc::new(InnertubeExtractor::new(client)),
@@ -36,44 +31,12 @@ impl YoutubeExtractor {
     }
 
     pub async fn extract_media(&self, target: &str) -> Result<ExtractedMedia> {
-        let innertube_result =
-            timeout(Duration::from_millis(1500), self.primary.extract(target)).await;
-
-        match innertube_result {
-            Ok(Ok(media)) => Ok(media),
-            Ok(Err(e)) => {
-                debug!("Innertube extractor failed ({e}), invoking yt-dlp fallback...");
-                self.fallback.extract(target).await
-            }
-            Err(_) => {
-                debug!("Innertube extractor timed out (1.5s), invoking yt-dlp fallback...");
+        match self.primary.extract(target).await {
+            Ok(media) => Ok(media),
+            Err(e) => {
+                debug!("Primary extractor failed ({e}), invoking fallback...");
                 self.fallback.extract(target).await
             }
         }
-    }
-
-    pub async fn fetch_natively(
-        &self,
-        video_id: &str,
-    ) -> Result<(VideoMetadata, Vec<AudioStreamInfo>)> {
-        let media = self.primary.extract(video_id).await?;
-        Ok((media.metadata, media.streams))
-    }
-
-    pub async fn fetch_fallback(video_url: &str) -> Result<(VideoMetadata, String)> {
-        Self::fetch_fallback_with_proxy(video_url, None).await
-    }
-
-    pub async fn fetch_fallback_with_proxy(
-        video_url: &str,
-        proxy: Option<String>,
-    ) -> Result<(VideoMetadata, String)> {
-        let extractor = YtDlpExtractor::with_proxy(proxy);
-        let media = extractor.extract(video_url).await?;
-        let url = media
-            .best_stream()
-            .map(|s| s.url.clone())
-            .unwrap_or_default();
-        Ok((media.metadata, url))
     }
 }

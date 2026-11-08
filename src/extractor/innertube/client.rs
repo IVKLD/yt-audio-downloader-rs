@@ -136,19 +136,32 @@ impl<'a> InnertubeClient<'a> {
             }
         };
 
+        let is_web = client_name.starts_with("WEB") || client_name == "MWEB";
+
         let mut req = self
             .http
             .post(url)
-            .header("User-Agent", user_agent)
-            .header("Origin", "https://www.youtube.com");
+            .header("User-Agent", user_agent);
+
+        if is_web {
+            req = req.header("Origin", "https://www.youtube.com");
+        }
 
         if client_name == "ANDROID_VR" {
             req = req
                 .header("X-YouTube-Client-Name", "28")
                 .header("X-YouTube-Client-Version", "1.65.10");
+        } else if client_name == "IOS" {
+            req = req
+                .header("X-YouTube-Client-Name", "5")
+                .header("X-YouTube-Client-Version", client_version);
+        } else if client_name == "ANDROID" {
+            req = req
+                .header("X-YouTube-Client-Name", "3")
+                .header("X-YouTube-Client-Version", client_version);
         }
 
-        if let Some(ref vd) = visitor_id {
+        if is_web && let Some(ref vd) = visitor_id {
             req = req.header("X-Goog-Visitor-Id", vd);
         }
 

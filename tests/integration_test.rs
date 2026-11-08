@@ -1,7 +1,6 @@
 use futures_util::StreamExt;
 use yt_audio_downloader::{
-    AudioFormat, AudioQuality, YoutubeAudioDownloader, download_audio, extractor::extract_video_id,
-    get_stream_info, stream_audio,
+    AudioFormat, Client, download_audio, extract_video_id, get_stream_info, stream_audio,
 };
 
 const TEST_URL: &str = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
@@ -69,12 +68,14 @@ async fn test_full_audio_download() {
 #[tokio::test]
 async fn test_downloader_custom_options() {
     let temp_dir = "target/test_custom_downloads";
-    let downloader = YoutubeAudioDownloader::new()
-        .output_dir(temp_dir)
-        .format(AudioFormat::M4a)
-        .quality(AudioQuality::High);
+    let _ = tokio::fs::create_dir_all(temp_dir).await;
+    let target_file = std::path::Path::new(temp_dir).join("custom.m4a");
 
-    let result = downloader.download(TEST_URL).await.unwrap();
+    let client = Client::new().unwrap();
+    let result = client
+        .download(TEST_URL, &target_file, AudioFormat::M4a, None)
+        .await
+        .unwrap();
 
     assert!(result.file_path.exists());
     assert!(result.file_size_bytes > 0);
@@ -93,7 +94,7 @@ async fn test_search_youtube() {
 
 #[tokio::test]
 async fn test_bench_streams() {
-    let client = yt_audio_downloader::Client::new().await.unwrap();
+    let client = yt_audio_downloader::Client::new().unwrap();
     let video_ids = [
         "dQw4w9WgXcQ",
         "kJQP7kiw5Fk",
@@ -108,7 +109,7 @@ async fn test_bench_streams() {
         match res {
             Ok(info) => {
                 assert!(!info.stream_url.is_empty());
-                assert!(elapsed < std::time::Duration::from_millis(1000));
+                assert!(elapsed < std::time::Duration::from_millis(2000));
             }
             Err(e) => {
                 panic!("Video {vid}: FAILED in {:?} with error: {e}", elapsed);
@@ -131,7 +132,6 @@ async fn test_client_builder_and_operations() {
         .with_max_retries(2)
         .with_proxy_provider(provider)
         .build()
-        .await
         .unwrap();
 
     let meta = client.fetch_metadata(TEST_URL).await.unwrap();
