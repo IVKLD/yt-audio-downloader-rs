@@ -34,20 +34,20 @@ impl YtDlpExtractor {
 
         let home = env::var("HOME").unwrap_or_default();
         let candidates = [
+            "yt-dlp".to_string(),
             format!("{home}/.local/bin/yt-dlp"),
             "./yt-dlp".to_string(),
-            "yt-dlp".to_string(),
         ];
         for candidate in candidates {
-            if Path::new(&candidate).exists()
-                || Command::new(&candidate)
-                    .arg("--version")
-                    .output()
-                    .await
-                    .is_ok()
+            if let Ok(output) = Command::new(&candidate)
+                .arg("--version")
+                .output()
+                .await
             {
-                let _ = CACHED_CMD.set(Some(candidate.clone()));
-                return Ok(candidate);
+                if output.status.success() {
+                    let _ = CACHED_CMD.set(Some(candidate.clone()));
+                    return Ok(candidate);
+                }
             }
         }
         let _ = CACHED_CMD.set(None);
