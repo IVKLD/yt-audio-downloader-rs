@@ -95,12 +95,7 @@ async fn test_search_youtube() {
 #[tokio::test]
 async fn test_bench_streams() {
     let client = yt_audio_downloader::Client::new().unwrap();
-    let video_ids = [
-        "dQw4w9WgXcQ",
-        "kJQP7kiw5Fk",
-        "9bZkp7q19f0",
-        "JGwWNGJdvx8",
-    ];
+    let video_ids = ["dQw4w9WgXcQ", "kJQP7kiw5Fk", "9bZkp7q19f0", "JGwWNGJdvx8"];
 
     for vid in video_ids {
         let start = std::time::Instant::now();

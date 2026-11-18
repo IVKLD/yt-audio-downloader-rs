@@ -119,7 +119,10 @@ impl FileService {
         let mut entries = fs::read_dir(dir).await?;
         while let Some(entry) = entries.next_entry().await? {
             let path = entry.path();
-            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or_default();
+            let name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or_default();
             if name.starts_with(stem) && !name.ends_with(".part") && !name.ends_with(".ytdl") {
                 return Ok(path);
             }

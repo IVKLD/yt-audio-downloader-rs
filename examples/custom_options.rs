@@ -14,7 +14,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let progress_cb: ProgressCallback = Arc::new(|downloaded, total: Option<u64>| {
         if let Some(t) = total {
-            print!("\r[>] Downloading: {:.1}% ({downloaded}/{t} bytes)", (downloaded as f64 / t as f64) * 100.0);
+            print!(
+                "\r[>] Downloading: {:.1}% ({downloaded}/{t} bytes)",
+                (downloaded as f64 / t as f64) * 100.0
+            );
         } else {
             print!("\r[>] Downloading: {downloaded} bytes");
         }

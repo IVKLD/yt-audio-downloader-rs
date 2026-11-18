@@ -55,7 +55,9 @@ impl YoutubeAudioDownloader {
         match extractor.extract_media(&video_id).await {
             Ok(media) => {
                 let Some(best_stream) = media.best_stream().cloned() else {
-                    return self.download_fallback(url_or_id, Some(media.metadata)).await;
+                    return self
+                        .download_fallback(url_or_id, Some(media.metadata))
+                        .await;
                 };
                 let metadata = media.metadata;
 
@@ -66,7 +68,11 @@ impl YoutubeAudioDownloader {
                 );
 
                 if let Err(err) = self
-                    .download_stream_to_file(&best_stream.url, best_stream.content_length, &temp_path)
+                    .download_stream_to_file(
+                        &best_stream.url,
+                        best_stream.content_length,
+                        &temp_path,
+                    )
                     .await
                 {
                     let _ = FileService::remove_file_if_exists(&temp_path).await;
@@ -118,11 +124,16 @@ impl YoutubeAudioDownloader {
         let stream = streamer.stream_from_url(url, total_size, 0, None).await?;
         let cb = self.progress.clone();
 
-        FileService::write_stream_to_file(output_path, stream, total_size, move |downloaded, total| {
-            if let Some(ref cb) = cb {
-                cb(downloaded, total);
-            }
-        })
+        FileService::write_stream_to_file(
+            output_path,
+            stream,
+            total_size,
+            move |downloaded, total| {
+                if let Some(ref cb) = cb {
+                    cb(downloaded, total);
+                }
+            },
+        )
         .await?;
 
         Ok(())

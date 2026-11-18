@@ -69,10 +69,7 @@ impl AudioStreamer {
         Self::convert_media_to_response(media)
     }
 
-    pub async fn stream_bytes(
-        self,
-        url_or_id: &str,
-    ) -> Result<(VideoMetadata, AudioByteStream)> {
+    pub async fn stream_bytes(self, url_or_id: &str) -> Result<(VideoMetadata, AudioByteStream)> {
         let info = self.get_stream_response(url_or_id).await?;
         let metadata = info.metadata.clone();
         let stream = self.stream_from_info(&info, 0, None).await?;
@@ -125,7 +122,14 @@ impl AudioStreamer {
             let next_offset = initial_offset + first_bytes.len() as u64;
 
             let stream = unfold(
-                (Some(first_bytes), next_offset, client, url, user_agent, final_end),
+                (
+                    Some(first_bytes),
+                    next_offset,
+                    client,
+                    url,
+                    user_agent,
+                    final_end,
+                ),
                 |(initial, offset, client, url, user_agent, final_end)| async move {
                     if let Some(b) = initial {
                         return Some((Ok(b), (None, offset, client, url, user_agent, final_end)));
@@ -161,10 +165,7 @@ impl AudioStreamer {
             return Ok(Box::pin(stream));
         }
 
-        let mut req = self
-            .client
-            .get(stream_url)
-            .header(USER_AGENT, user_agent);
+        let mut req = self.client.get(stream_url).header(USER_AGENT, user_agent);
 
         if let Some(end) = end_offset {
             req = req.header(RANGE, format!("bytes={start_offset}-{end}"));

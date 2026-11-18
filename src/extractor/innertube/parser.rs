@@ -29,7 +29,9 @@ pub fn parse_player_response(video_id: &str, json: &Value) -> Result<ExtractedMe
                 .get("reason")
                 .and_then(|v| v.as_str())
                 .unwrap_or("Track is unplayable");
-            return Err(YoutubeAudioError::DownloadFailed(format!("{status}: {reason}")));
+            return Err(YoutubeAudioError::DownloadFailed(format!(
+                "{status}: {reason}"
+            )));
         }
     }
 
@@ -88,16 +90,16 @@ pub fn parse_player_response(video_id: &str, json: &Value) -> Result<ExtractedMe
                 }
             }
         }
-        if target_formats.is_empty() {
-            if let Some(formats) = streaming_data.get("formats").and_then(|v| v.as_array()) {
-                for fmt in formats {
-                    let mime = fmt.get("mimeType").and_then(|v| v.as_str()).unwrap_or("");
-                    if mime.starts_with("audio/")
-                        || fmt.get("audioQuality").is_some()
-                        || fmt.get("audioSampleRate").is_some()
-                    {
-                        target_formats.push(fmt);
-                    }
+        if target_formats.is_empty()
+            && let Some(formats) = streaming_data.get("formats").and_then(|v| v.as_array())
+        {
+            for fmt in formats {
+                let mime = fmt.get("mimeType").and_then(|v| v.as_str()).unwrap_or("");
+                if mime.starts_with("audio/")
+                    || fmt.get("audioQuality").is_some()
+                    || fmt.get("audioSampleRate").is_some()
+                {
+                    target_formats.push(fmt);
                 }
             }
         }

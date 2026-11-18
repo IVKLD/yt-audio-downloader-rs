@@ -39,15 +39,11 @@ impl YtDlpExtractor {
             "./yt-dlp".to_string(),
         ];
         for candidate in candidates {
-            if let Ok(output) = Command::new(&candidate)
-                .arg("--version")
-                .output()
-                .await
+            if let Ok(output) = Command::new(&candidate).arg("--version").output().await
+                && output.status.success()
             {
-                if output.status.success() {
-                    let _ = CACHED_CMD.set(Some(candidate.clone()));
-                    return Ok(candidate);
-                }
+                let _ = CACHED_CMD.set(Some(candidate.clone()));
+                return Ok(candidate);
             }
         }
         let _ = CACHED_CMD.set(None);
@@ -88,16 +84,10 @@ impl YtDlpExtractor {
             cmd.args(["--proxy", proxy]);
         }
 
-        let home = std::env::var("HOME").unwrap_or_default();
         if std::path::Path::new("./cookies.txt").exists() {
             cmd.args(["--cookies", "./cookies.txt"]);
-        } else if !home.is_empty()
-            && std::path::Path::new(&format!("{home}/.config/vortex-dl/cookies.txt")).exists()
-        {
-            cmd.args([
-                "--cookies",
-                &format!("{home}/.config/vortex-dl/cookies.txt"),
-            ]);
+        } else if let Some(cookie_path) = crate::cookies::ensure_youtube_cookies_available().await {
+            cmd.args(["--cookies", cookie_path.to_str().unwrap_or_default()]);
         }
 
         Ok(cmd)
@@ -136,6 +126,40 @@ impl YtDlpExtractor {
         let output = cmd.output().await?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+            if is_auth_or_bot_error(&stderr) {
+                tracing::info!(
+                    "YouTube requested sign-in / verification. Attempting automatic cookie refresh from browser..."
+                );
+                if crate::cookies::auto_import_cookies(true).await.is_ok() {
+                    let mut retry_cmd = self.build_command().await?;
+                    retry_cmd.args([
+                        "-x",
+                        "--audio-format",
+                        format_arg,
+                        "--audio-quality",
+                        quality.bitrate_kbps(),
+                        "-o",
+                        output_template.to_str().unwrap_or_default(),
+                        "--no-playlist",
+                        "--no-warnings",
+                    ]);
+
+                    if embed_metadata {
+                        retry_cmd.arg("--add-metadata");
+                    }
+
+                    retry_cmd.arg(target);
+                    let retry_output = retry_cmd.output().await?;
+                    if retry_output.status.success() {
+                        return Ok(());
+                    }
+                    let retry_stderr = String::from_utf8_lossy(&retry_output.stderr).to_string();
+                    return Err(YoutubeAudioError::YtDlpFailed {
+                        status: retry_output.status.code(),
+                        stderr: retry_stderr,
+                    });
+                }
+            }
             return Err(YoutubeAudioError::YtDlpFailed {
                 status: output.status.code(),
                 stderr,
@@ -143,6 +167,14 @@ impl YtDlpExtractor {
         }
         Ok(())
     }
+}
+
+pub(crate) fn is_auth_or_bot_error(stderr: &str) -> bool {
+    stderr.contains("Sign in to confirm your age")
+        || stderr.contains("Sign in to confirm you’re not a bot")
+        || stderr.contains("Sign in to confirm you're not a bot")
+        || stderr.contains("Sign in to confirm")
+        || stderr.contains("This video is only available to registered users")
 }
 
 impl MediaExtractor for YtDlpExtractor {
@@ -162,6 +194,39 @@ impl MediaExtractor for YtDlpExtractor {
             cmd.arg(target);
 
             let output = cmd.output().await?;
+            let output = if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                if is_auth_or_bot_error(&stderr) {
+                    tracing::info!(
+                        "YouTube requested sign-in / verification. Attempting automatic cookie refresh from browser..."
+                    );
+                    if crate::cookies::auto_import_cookies(true).await.is_ok() {
+                        let mut retry_cmd = self.build_command().await?;
+                        retry_cmd.args([
+                            "-j",
+                            "-f",
+                            "bestaudio/best",
+                            "--no-playlist",
+                            "--no-warnings",
+                        ]);
+                        retry_cmd.arg(target);
+                        retry_cmd.output().await?
+                    } else {
+                        return Err(YoutubeAudioError::YtDlpFailed {
+                            status: output.status.code(),
+                            stderr,
+                        });
+                    }
+                } else {
+                    return Err(YoutubeAudioError::YtDlpFailed {
+                        status: output.status.code(),
+                        stderr,
+                    });
+                }
+            } else {
+                output
+            };
+
             if !output.status.success() {
                 let stderr = String::from_utf8_lossy(&output.stderr).to_string();
                 return Err(YoutubeAudioError::YtDlpFailed {

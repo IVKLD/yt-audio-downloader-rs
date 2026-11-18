@@ -7,7 +7,7 @@ use tokio::sync::RwLock;
 
 use crate::{
     error::{Result, YoutubeAudioError},
-    http::YOUTUBE_COOKIE_HEADER,
+    http::get_youtube_cookie_header,
 };
 
 static VISITOR_DATA: LazyLock<RwLock<Option<String>>> = LazyLock::new(|| RwLock::new(None));
@@ -138,10 +138,7 @@ impl<'a> InnertubeClient<'a> {
 
         let is_web = client_name.starts_with("WEB") || client_name == "MWEB";
 
-        let mut req = self
-            .http
-            .post(url)
-            .header("User-Agent", user_agent);
+        let mut req = self.http.post(url).header("User-Agent", user_agent);
 
         if is_web {
             req = req.header("Origin", "https://www.youtube.com");
@@ -167,10 +164,10 @@ impl<'a> InnertubeClient<'a> {
 
         // Only attach desktop cookies to web clients. Sending desktop cookies to mobile/VR clients
         // causes YouTube Innertube to return HTTP 400 (FAILED_PRECONDITION).
-        if client_name.starts_with("WEB") || client_name == "MWEB" {
-            if let Some(ref cookies) = *YOUTUBE_COOKIE_HEADER {
-                req = req.header(COOKIE, cookies);
-            }
+        if (client_name.starts_with("WEB") || client_name == "MWEB")
+            && let Some(ref cookies) = get_youtube_cookie_header()
+        {
+            req = req.header(COOKIE, cookies);
         }
 
         let resp = req.json(&payload).send().await?;
@@ -199,7 +196,7 @@ impl<'a> InnertubeClient<'a> {
         });
 
         let mut req = self.http.post(url).json(&payload);
-        if let Some(ref cookies) = *YOUTUBE_COOKIE_HEADER {
+        if let Some(ref cookies) = get_youtube_cookie_header() {
             req = req.header(COOKIE, cookies);
         }
 
@@ -229,7 +226,7 @@ impl<'a> InnertubeClient<'a> {
         });
 
         let mut req = self.http.post(url).json(&payload);
-        if let Some(ref cookies) = *YOUTUBE_COOKIE_HEADER {
+        if let Some(ref cookies) = get_youtube_cookie_header() {
             req = req.header(COOKIE, cookies);
         }
 
@@ -259,7 +256,7 @@ impl<'a> InnertubeClient<'a> {
         });
 
         let mut req = self.http.post(url).json(&payload);
-        if let Some(ref cookies) = *YOUTUBE_COOKIE_HEADER {
+        if let Some(ref cookies) = get_youtube_cookie_header() {
             req = req.header(COOKIE, cookies);
         }
 

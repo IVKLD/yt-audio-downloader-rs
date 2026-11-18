@@ -12,10 +12,7 @@ pub use strategy::MediaExtractor;
 use tracing::debug;
 pub use ytdlp::YtDlpExtractor;
 
-use crate::{
-    error::Result,
-    models::ExtractedMedia,
-};
+use crate::{error::Result, models::ExtractedMedia};
 
 pub struct YoutubeExtractor {
     primary: Arc<dyn MediaExtractor>,

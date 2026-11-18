@@ -1,16 +1,35 @@
-use std::{env, fs, path::PathBuf, sync::LazyLock, time::Duration};
+use std::{fs, path::PathBuf, sync::RwLock, time::Duration};
 
 use reqwest::{Client, Proxy};
 
-pub static YOUTUBE_COOKIE_HEADER: LazyLock<Option<String>> =
-    LazyLock::new(load_youtube_cookie_header);
+use crate::cookies::resolve_cookie_path;
+
+static CACHED_COOKIE_HEADER: RwLock<Option<Option<String>>> = RwLock::new(None);
+
+pub fn get_youtube_cookie_header() -> Option<String> {
+    if let Ok(guard) = CACHED_COOKIE_HEADER.read()
+        && let Some(ref cached) = *guard
+    {
+        return cached.clone();
+    }
+
+    let loaded = load_youtube_cookie_header();
+    if let Ok(mut guard) = CACHED_COOKIE_HEADER.write() {
+        *guard = Some(loaded.clone());
+    }
+    loaded
+}
+
+pub fn reload_youtube_cookie_header() -> Option<String> {
+    let loaded = load_youtube_cookie_header();
+    if let Ok(mut guard) = CACHED_COOKIE_HEADER.write() {
+        *guard = Some(loaded.clone());
+    }
+    loaded
+}
 
 pub fn load_youtube_cookie_header() -> Option<String> {
-    let home = env::var("HOME").unwrap_or_default();
-    let candidates = [
-        PathBuf::from("./cookies.txt"),
-        PathBuf::from(format!("{home}/.config/vortex-dl/cookies.txt")),
-    ];
+    let candidates = [PathBuf::from("./cookies.txt"), resolve_cookie_path()];
 
     for path in &candidates {
         if path.exists()

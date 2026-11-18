@@ -4,16 +4,18 @@
 
 pub mod client;
 mod converter;
+pub mod cookies;
 mod downloader;
 pub mod error;
 mod extractor;
 pub mod fs;
-mod http;
+pub mod http;
 pub mod models;
 pub mod progress;
 mod streamer;
 
 pub use client::{Client, ClientBuilder, ProxyUrlProvider, RetryConfig};
+pub use cookies::{auto_import_cookies, ensure_youtube_cookies_available};
 pub use error::{Result, YoutubeAudioError};
 pub use extractor::{extract_playlist_id, extract_video_id, is_youtube_url, youtube_id_to_i64};
 pub use fs::FileService;
@@ -42,10 +44,10 @@ pub async fn get_stream_info(url_or_id: &str) -> Result<AudioStreamResponse> {
         .await
 }
 
-pub async fn stream_audio(
-    url_or_id: &str,
-) -> Result<(VideoMetadata, AudioByteStream)> {
-    streamer::AudioStreamer::default().stream_bytes(url_or_id).await
+pub async fn stream_audio(url_or_id: &str) -> Result<(VideoMetadata, AudioByteStream)> {
+    streamer::AudioStreamer::default()
+        .stream_bytes(url_or_id)
+        .await
 }
 
 pub async fn fetch_playlist(url_or_id: &str) -> Result<Vec<VideoMetadata>> {

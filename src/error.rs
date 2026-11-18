@@ -66,7 +66,7 @@ impl YoutubeAudioError {
     pub fn is_status(&self, code: u16) -> bool {
         match self {
             Self::HttpStatus { status, .. } => *status == code,
-            Self::HttpRequest(err) => err.status().map_or(false, |s| s.as_u16() == code),
+            Self::HttpRequest(err) => err.status().is_some_and(|s| s.as_u16() == code),
             _ => false,
         }
     }
@@ -82,9 +82,11 @@ impl YoutubeAudioError {
 
 fn clean_ytdlp_stderr(stderr: &str) -> String {
     if stderr.contains("Sign in to confirm you’re not a bot")
-        || stderr.contains("Sign in to confirm")
+        || stderr.contains("Sign in to confirm you're not a bot")
     {
         "YouTube bot verification triggered for this track. Configure proxy or cookies.txt in settings".to_string()
+    } else if stderr.contains("Sign in to confirm your age") {
+        "YouTube age verification triggered for this track. Configure cookies.txt from a logged-in account in settings".to_string()
     } else if let Some(err_line) = stderr.lines().find(|l| l.contains("ERROR:")) {
         err_line.trim().to_string()
     } else {

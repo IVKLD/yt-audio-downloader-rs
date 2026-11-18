@@ -182,7 +182,9 @@ impl Client {
         url_or_id: &str,
     ) -> Result<Vec<VideoMetadata>, YoutubeAudioError> {
         let (client, _) = self.session().await?;
-        InnertubeExtractor::new(client).fetch_playlist(url_or_id).await
+        InnertubeExtractor::new(client)
+            .fetch_playlist(url_or_id)
+            .await
     }
 
     /// Search YouTube for videos matching a query.
