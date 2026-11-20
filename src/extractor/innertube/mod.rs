@@ -26,9 +26,8 @@ impl InnertubeExtractor {
     }
 
     pub async fn fetch_playlist(&self, url_or_id: &str) -> Result<Vec<VideoMetadata>> {
-        let playlist_id = extract_playlist_id(url_or_id).ok_or_else(|| {
-            YoutubeAudioError::InvalidUrl("Not a valid playlist URL or ID".into())
-        })?;
+        let playlist_id = extract_playlist_id(url_or_id)
+            .ok_or_else(|| YoutubeAudioError::PlaylistIdNotFound(url_or_id.to_string()))?;
 
         let browse_id = if playlist_id.starts_with("VL") {
             playlist_id

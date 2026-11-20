@@ -1,12 +1,15 @@
 use thiserror::Error;
 
-#[derive(Error, Debug)]
+#[derive(Debug, Error)]
 pub enum YoutubeAudioError {
     #[error("Invalid YouTube URL: {0}")]
     InvalidUrl(String),
 
     #[error("Failed to parse video ID: {0}")]
     VideoIdNotFound(String),
+
+    #[error("Failed to parse playlist ID: {0}")]
+    PlaylistIdNotFound(String),
 
     #[error("HTTP request failed: {0}")]
     HttpRequest(#[from] reqwest::Error),
@@ -26,6 +29,12 @@ pub enum YoutubeAudioError {
     #[error("HTTP {status}: {message}")]
     HttpStatus { status: u16, message: String },
 
+    #[error("Track is unplayable ({status}): {reason}")]
+    UnplayableTrack { status: String, reason: String },
+
+    #[error("Missing video details in player response")]
+    MissingVideoDetails,
+
     #[error("No audio stream found")]
     NoAudioStreamFound,
 
@@ -43,6 +52,15 @@ pub enum YoutubeAudioError {
 
     #[error("Download failed: {0}")]
     DownloadFailed(String),
+
+    #[error("Downloaded file not found")]
+    DownloadedFileNotFound,
+
+    #[error("Incomplete download: received {received} of {expected} bytes")]
+    IncompleteDownload { received: u64, expected: u64 },
+
+    #[error("Failed to automatically extract YouTube cookies from installed browsers")]
+    CookieExtractionFailed,
 
     #[error("{0}")]
     Other(String),

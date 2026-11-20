@@ -29,15 +29,16 @@ pub fn parse_player_response(video_id: &str, json: &Value) -> Result<ExtractedMe
                 .get("reason")
                 .and_then(|v| v.as_str())
                 .unwrap_or("Track is unplayable");
-            return Err(YoutubeAudioError::DownloadFailed(format!(
-                "{status}: {reason}"
-            )));
+            return Err(YoutubeAudioError::UnplayableTrack {
+                status: status.to_string(),
+                reason: reason.to_string(),
+            });
         }
     }
 
     let details = json
         .get("videoDetails")
-        .ok_or_else(|| YoutubeAudioError::DownloadFailed("Missing videoDetails".into()))?;
+        .ok_or(YoutubeAudioError::MissingVideoDetails)?;
 
     let metadata = VideoMetadata {
         id: video_id.to_string(),
@@ -131,6 +132,18 @@ pub fn parse_player_response(video_id: &str, json: &Value) -> Result<ExtractedMe
             "unknown"
         };
 
+        let content_length = fmt
+            .get("contentLength")
+            .and_then(|v| v.as_str())
+            .and_then(|s| s.parse().ok())
+            .or_else(|| {
+                url::Url::parse(&direct_url).ok().and_then(|u| {
+                    u.query_pairs()
+                        .find(|(k, _)| k == "clen")
+                        .and_then(|(_, v)| v.parse().ok())
+                })
+            });
+
         streams.push(AudioStreamInfo {
             url: direct_url,
             mime_type: mime.to_string(),
@@ -139,10 +152,7 @@ pub fn parse_player_response(video_id: &str, json: &Value) -> Result<ExtractedMe
                 .get("audioSampleRate")
                 .and_then(|v| v.as_str())
                 .and_then(|s| s.parse().ok()),
-            content_length: fmt
-                .get("contentLength")
-                .and_then(|v| v.as_str())
-                .and_then(|s| s.parse().ok()),
+            content_length,
             container: container.to_string(),
             audio_codec: codec.to_string(),
         });

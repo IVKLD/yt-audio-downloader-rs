@@ -111,6 +111,17 @@ impl FileService {
         }
 
         writer.flush().await?;
+
+        if let Some(expected) = total_size
+            && expected > 0
+            && downloaded < expected
+        {
+            return Err(YoutubeAudioError::IncompleteDownload {
+                received: downloaded,
+                expected,
+            });
+        }
+
         Ok(downloaded)
     }
 
@@ -127,8 +138,6 @@ impl FileService {
                 return Ok(path);
             }
         }
-        Err(YoutubeAudioError::DownloadFailed(
-            "Downloaded file not found".into(),
-        ))
+        Err(YoutubeAudioError::DownloadedFileNotFound)
     }
 }

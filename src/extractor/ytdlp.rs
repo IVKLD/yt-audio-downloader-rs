@@ -73,7 +73,7 @@ impl YtDlpExtractor {
             "--no-config",
             "--no-check-certificates",
             "--socket-timeout",
-            "5",
+            "15",
             "--extractor-args",
             "youtube:player_client=web_embedded,web;skip=hls,dash",
         ]);

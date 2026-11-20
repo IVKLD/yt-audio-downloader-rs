@@ -267,9 +267,7 @@ pub async fn auto_import_cookies(force_refresh: bool) -> Result<PathBuf> {
         return Ok(target_path);
     }
 
-    Err(YoutubeAudioError::Other(
-        "Failed to automatically extract YouTube cookies from installed browsers".into(),
-    ))
+    Err(YoutubeAudioError::CookieExtractionFailed)
 }
 
 /// Ensure YouTube cookies are available, auto-importing from browsers if missing or unauthenticated.

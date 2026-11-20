@@ -1,6 +1,18 @@
+use std::sync::LazyLock;
+
 use regex::Regex;
 
 use crate::error::{Result, YoutubeAudioError};
+
+static VIDEO_ID_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?:youtube\.com/(?:[^/]+/.+/|(?:v|e(?:mbed)?|shorts)/|.*[?&]v=)|youtu\.be/)([^?&/]{11})",
+    )
+    .expect("valid video ID regex")
+});
+
+static PLAYLIST_ID_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"[?&]list=([a-zA-Z0-9_-]+)").expect("valid playlist ID regex"));
 
 pub fn is_youtube_url(url_or_str: &str) -> bool {
     let trimmed = url_or_str.trim();
@@ -31,12 +43,8 @@ pub fn extract_video_id(url_or_id: &str) -> Result<String> {
         return Ok(trimmed.to_string());
     }
 
-    let re = Regex::new(
-        r"(?:youtube\.com/(?:[^/]+/.+/|(?:v|e(?:mbed)?|shorts)/|.*[?&]v=)|youtu\.be/)([^?&/]{11})",
-    )
-    .map_err(|e| YoutubeAudioError::InvalidUrl(e.to_string()))?;
-
-    re.captures(trimmed)
+    VIDEO_ID_RE
+        .captures(trimmed)
         .and_then(|c| c.get(1))
         .map(|m| m.as_str().to_string())
         .ok_or_else(|| YoutubeAudioError::VideoIdNotFound(url_or_id.to_string()))
@@ -61,8 +69,8 @@ pub fn extract_playlist_id(url_or_id: &str) -> Option<String> {
         }
     }
 
-    let re = Regex::new(r"[?&]list=([a-zA-Z0-9_-]+)").ok()?;
-    re.captures(trimmed)
+    PLAYLIST_ID_RE
+        .captures(trimmed)
         .and_then(|c| c.get(1))
         .map(|m| m.as_str().to_string())
 }

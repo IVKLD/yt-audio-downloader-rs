@@ -1,7 +1,7 @@
 use std::pin::Pin;
 
 use bytes::Bytes;
-use futures_util::{Stream, stream::unfold};
+use futures_util::Stream;
 use reqwest::{
     Client,
     header::{RANGE, USER_AGENT},
@@ -99,81 +99,29 @@ impl AudioStreamer {
         end_offset: Option<u64>,
     ) -> Result<AudioByteStream> {
         let user_agent = select_user_agent_for_url(stream_url);
-        let url = stream_url.to_string();
-        let client = self.client.clone();
-
-        if let Some(total) = content_length
-            && total > 0
-        {
-            const CHUNK_SIZE: u64 = 512 * 1024;
-            let final_end = end_offset.unwrap_or(total - 1).min(total - 1);
-            let initial_offset = std::cmp::min(start_offset, final_end);
-
-            let first_end = std::cmp::min(initial_offset + CHUNK_SIZE - 1, final_end);
-            let first_res = client
-                .get(&url)
-                .header(USER_AGENT, user_agent)
-                .header(RANGE, format!("bytes={initial_offset}-{first_end}"))
-                .send()
-                .await?
-                .error_for_status()?;
-
-            let first_bytes = first_res.bytes().await?;
-            let next_offset = initial_offset + first_bytes.len() as u64;
-
-            let stream = unfold(
-                (
-                    Some(first_bytes),
-                    next_offset,
-                    client,
-                    url,
-                    user_agent,
-                    final_end,
-                ),
-                |(initial, offset, client, url, user_agent, final_end)| async move {
-                    if let Some(b) = initial {
-                        return Some((Ok(b), (None, offset, client, url, user_agent, final_end)));
-                    }
-
-                    if offset > final_end {
-                        return None;
-                    }
-
-                    let end = std::cmp::min(offset + CHUNK_SIZE - 1, final_end);
-                    for _ in 0..3 {
-                        let res = client
-                            .get(&url)
-                            .header(USER_AGENT, user_agent)
-                            .header(RANGE, format!("bytes={offset}-{end}"))
-                            .send()
-                            .await;
-
-                        if let Ok(resp) = res
-                            && (resp.status().is_success() || resp.status() == 206)
-                            && let Ok(b) = resp.bytes().await
-                        {
-                            if b.is_empty() {
-                                return None;
-                            }
-                            let next = offset + b.len() as u64;
-                            return Some((Ok(b), (None, next, client, url, user_agent, final_end)));
-                        }
-                    }
-                    None
-                },
-            );
-            return Ok(Box::pin(stream));
-        }
-
         let mut req = self.client.get(stream_url).header(USER_AGENT, user_agent);
 
-        if let Some(end) = end_offset {
-            req = req.header(RANGE, format!("bytes={start_offset}-{end}"));
-        } else if start_offset > 0 {
-            req = req.header(RANGE, format!("bytes={start_offset}-"));
+        let is_full_file = start_offset == 0
+            && match (end_offset, content_length) {
+                (None, _) => true,
+                (Some(end), Some(total)) if total > 0 => end >= total - 1,
+                _ => false,
+            };
+
+        if !is_full_file {
+            let clamped_end = match (end_offset, content_length) {
+                (Some(end), Some(total)) if total > 0 => Some(end.min(total - 1)),
+                (end, _) => end,
+            };
+
+            let range_header = match clamped_end {
+                Some(end) => format!("bytes={start_offset}-{end}"),
+                None => format!("bytes={start_offset}-"),
+            };
+            req = req.header(RANGE, range_header);
         }
 
-        let http_response = req.send().await?.error_for_status()?;
-        Ok(Box::pin(http_response.bytes_stream()))
+        let response = req.send().await?.error_for_status()?;
+        Ok(Box::pin(response.bytes_stream()))
     }
 }
